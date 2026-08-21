@@ -1,0 +1,82 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: "Which build to produce"
+        required: true
+        default: debug
+        type: choice
+        options: [ debug, release ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Generate the Gradle wrapper
+        run: gradle wrapper --gradle-version 8.7 --no-daemon
+
+      - name: Build debug APK
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.variant == 'debug' }}
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      # A release APK needs a keystore. Create one locally:
+      #   keytool -genkey -v -keystore eleven.jks -keyalg RSA -keysize 2048 \
+      #           -validity 10000 -alias eleven
+      # Then add four repo secrets: KEYSTORE_B64 (base64 of the .jks),
+      # KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD.
+      - name: Decode keystore
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.variant == 'release' }}
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::error::No KEYSTORE_B64 secret set. Build the debug variant instead, or add the four signing secrets."
+            exit 1
+          fi
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/eleven.jks"
+
+      - name: Build release APK
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.variant == 'release' }}
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          ./gradlew assembleRelease --no-daemon --stacktrace \
+            -Pandroid.injected.signing.store.file="$RUNNER_TEMP/eleven.jks" \
+            -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
+            -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
+            -Pandroid.injected.signing.key.password="$KEY_PASSWORD"
+
+      - name: Collect the APK
+        run: |
+          mkdir -p out
+          find app/build/outputs/apk -name '*.apk' -exec cp {} out/ \;
+          ls -lh out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eleven-minutes-apk
+          path: out/*.apk
+          if-no-files-found: error
+          retention-days: 30

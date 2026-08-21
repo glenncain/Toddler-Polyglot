@@ -1,0 +1,983 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>·</title>
+<style>
+:root{
+  --en:#6A4C93; --en-on:#F7F3FB;
+  --es:#DE5B49; --es-on:#FFF4F1;
+  --ja:#2A8271; --ja-on:#F0FBF7;
+  --zh:#EFB135; --zh-on:#2A2103;
+  --night:#171526;
+  --ground:#EBE7F1; --ink:#221F2E; --soft:#6E6883; --card:#FBF9FD; --line:rgba(34,31,46,.13);
+  --display: ui-rounded,"Arial Rounded MT Bold","Segoe UI Rounded","Varela Round",system-ui,sans-serif;
+  --data: ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --stage:var(--night); --on:#EBE7F1;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;margin:0;overflow:hidden;overscroll-behavior:none;touch-action:manipulation}
+body{font-family:var(--display);background:var(--night);color:var(--ink);-webkit-user-select:none;user-select:none}
+
+/* ══════════ HER SIDE — no text, no menus, no scores ══════════ */
+#child{
+  position:fixed;inset:0;background:var(--stage);
+  display:grid;place-items:center;transition:background .6s ease;
+  padding:max(20px,env(safe-area-inset-top)) 20px max(20px,env(safe-area-inset-bottom));
+}
+#picture{
+  width:min(64vh,80vw);aspect-ratio:1;border-radius:14%;
+  background:rgba(255,255,255,.94);
+  display:grid;place-items:center;font-size:min(42vh,52vw);line-height:1;
+  border:0;padding:0;cursor:pointer;
+  box-shadow:0 22px 0 rgba(0,0,0,.14);
+  transition:transform .25s cubic-bezier(.2,1.5,.4,1);
+}
+#picture.invite{animation:invite 2.6s ease-in-out infinite}
+@keyframes invite{0%,88%,100%{transform:translateY(0) rotate(0)}92%{transform:translateY(-14px) rotate(-1.4deg)}96%{transform:translateY(-6px) rotate(1deg)}}
+#picture.said{animation:said .5s cubic-bezier(.2,1.6,.35,1)}
+@keyframes said{0%{transform:scale(1)}45%{transform:scale(1.09)}100%{transform:scale(1)}}
+#picture:active{transform:scale(.97)}
+
+#ear{
+  position:absolute;width:min(74vh,92vw);aspect-ratio:1;border-radius:16%;
+  border:4px solid currentColor;color:var(--on);opacity:0;pointer-events:none;
+}
+#ear.on{animation:breathe 3.6s ease-in-out infinite}
+@keyframes breathe{0%,100%{opacity:.10;transform:scale(.97)}50%{opacity:.42;transform:scale(1.03)}}
+
+/* the end of eleven minutes, said without a word */
+#moon{position:absolute;font-size:min(28vh,34vw);opacity:0;transition:opacity 1.2s ease;pointer-events:none}
+#moon.on{opacity:.9;animation:float 7s ease-in-out infinite}
+@keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-16px)}}
+
+/* the only two controls she can reach, and they carry no words */
+#hands{position:absolute;left:0;right:0;bottom:0;display:flex;gap:0;opacity:.28;transition:opacity .3s}
+#hands:hover,#hands:focus-within{opacity:.7}
+#hands button{flex:1;height:74px;background:none;border:0;color:var(--on);font-size:26px;cursor:pointer}
+#hands button:active{background:rgba(255,255,255,.09)}
+#gate{position:absolute;top:0;left:0;width:76px;height:76px;background:none;border:0;cursor:pointer;opacity:0}
+
+/* ══════════ THEIR SIDE — words allowed here ══════════ */
+#parent{
+  position:fixed;inset:0;background:var(--ground);color:var(--ink);
+  overflow-y:auto;-webkit-overflow-scrolling:touch;display:none;
+  padding:max(24px,env(safe-area-inset-top)) 22px max(40px,env(safe-area-inset-bottom));
+}
+#parent.on{display:block}
+.wrap{max-width:640px;margin:0 auto;display:flex;flex-direction:column;gap:26px}
+.eyebrow{font-family:var(--data);font-size:11px;letter-spacing:.24em;text-transform:uppercase;color:var(--soft)}
+h1{font-size:clamp(30px,7.5vw,46px);line-height:1.03;margin:0;letter-spacing:-.025em}
+h1 b{font-weight:inherit;color:var(--es)}
+h2{font-size:19px;margin:0 0 2px;letter-spacing:-.01em}
+p.sub{margin:0;color:var(--soft);font-size:15px;line-height:1.5;max-width:44ch}
+
+.panel{background:var(--card);border-radius:22px;overflow:hidden}
+.panel > .hd{padding:15px 18px;font-family:var(--data);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--soft);border-bottom:1px solid var(--line)}
+
+.row{display:flex;align-items:center;gap:13px;padding:13px 18px;border-bottom:1px solid var(--line)}
+.row:last-child{border-bottom:0}
+.row .e{font-size:27px;width:34px;text-align:center;flex:none}
+.row .t{flex:1;min-width:0}
+.row .t strong{display:block;font-size:19px;letter-spacing:-.01em}
+.row .t small{display:block;font-family:var(--data);font-size:11px;color:var(--soft);line-height:1.55;margin-top:3px}
+.tag{width:9px;height:9px;border-radius:50%;flex:none}
+
+.bars{display:flex;flex-direction:column;gap:13px;padding:18px}
+.bar{display:grid;grid-template-columns:74px 1fr 48px;align-items:center;gap:12px;font-family:var(--data);font-size:12px}
+.track{height:7px;border-radius:99px;background:var(--line);overflow:hidden}
+.fill{height:100%;border-radius:99px;transition:width .8s cubic-bezier(.2,1,.3,1)}
+.bar .n{text-align:right;font-family:var(--display);font-size:17px}
+.total{display:flex;justify-content:space-between;align-items:baseline;padding:15px 18px;border-top:1px solid var(--line)}
+.total span{font-family:var(--data);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--soft)}
+.total b{font-size:34px;letter-spacing:-.03em}
+
+.chips{display:flex;gap:9px;flex-wrap:wrap}
+.chip{padding:11px 17px;border-radius:999px;font-size:15px;background:var(--card);border:2px solid var(--line);color:var(--soft);display:flex;align-items:center;gap:8px;cursor:pointer;font-family:inherit}
+.chip i{width:11px;height:11px;border-radius:50%;background:currentColor;opacity:.3;font-style:normal}
+.chip[aria-pressed="true"]{background:var(--c);border-color:var(--c);color:var(--oc)}
+.chip[aria-pressed="true"] i{opacity:1}
+
+button.act{font-family:inherit;font-size:16px;padding:16px 22px;border-radius:16px;border:0;background:var(--ink);color:var(--ground);cursor:pointer}
+button.act.ghost{background:transparent;color:var(--ink);border:2px solid var(--line)}
+button.act.big{font-size:19px;padding:19px 30px}
+button.act:active{transform:translateY(2px)}
+.acts{display:flex;gap:9px;flex-wrap:wrap}
+button:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
+
+/* recording */
+.mic{width:52px;height:52px;border-radius:50%;border:2px solid var(--line);background:none;font-size:20px;cursor:pointer;flex:none;display:grid;place-items:center;color:var(--ink)}
+.mic.has{border-color:transparent;background:var(--ink);color:var(--ground)}
+.mic.rec{background:var(--es);border-color:var(--es);color:#fff;animation:pulse .9s ease-in-out infinite}
+@keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.12)}}
+select,input[type=text]{font-family:inherit;font-size:15px;padding:11px 13px;border-radius:12px;border:2px solid var(--line);background:var(--ground);color:var(--ink)}
+.voices{display:flex;gap:9px;align-items:center;flex-wrap:wrap;padding:14px 18px;border-bottom:1px solid var(--line)}
+.who{display:flex;gap:7px;align-items:center}
+.who input{width:104px}
+.reclist{max-height:46vh;overflow-y:auto}
+
+textarea{width:100%;height:150px;font-family:var(--data);font-size:11px;line-height:1.5;border-radius:14px;border:2px solid var(--line);padding:12px;background:var(--ground);color:var(--ink);resize:none}
+.note{font-family:var(--data);font-size:11.5px;line-height:1.75;color:var(--soft)}
+.hide{display:none!important}
+
+#toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(150%);background:var(--ink);color:var(--ground);padding:13px 20px;border-radius:13px;font-family:var(--data);font-size:11px;letter-spacing:.12em;text-transform:uppercase;transition:transform .32s cubic-bezier(.2,1,.3,1);z-index:99}
+#toast.up{transform:translateX(-50%) translateY(0)}
+.pill{font-family:var(--data);font-size:10px;letter-spacing:.1em;text-transform:uppercase;padding:5px 10px;border-radius:99px;background:var(--line);color:var(--soft);white-space:nowrap}
+.pill.good{background:#2A8271;color:#F0FBF7}
+.pill.warn{background:#EFB135;color:#2A2103}
+.pill.bad{background:#DE5B49;color:#FFF4F1}
+.pill.wait{background:var(--ink);color:var(--ground)}
+.tiny{width:44px;height:44px;border-radius:13px;border:2px solid var(--line);background:none;font-size:17px;cursor:pointer;flex:none;color:var(--ink)}
+.tiny:active{transform:translateY(2px)}
+.tiny.live{background:var(--es);border-color:var(--es);color:#fff;animation:pulse .9s ease-in-out infinite}
+.meter{height:9px;border-radius:99px;background:var(--line);overflow:hidden;margin-top:7px}
+.meter span{display:block;height:100%;width:0;background:var(--ja);border-radius:99px;transition:width .08s linear}
+.pair{display:flex;gap:7px;flex:none}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}#ear.on{opacity:.34}#moon.on{opacity:.9}}
+</style>
+</head>
+<body>
+
+<!-- ─────────── her side ─────────── -->
+<div id="child">
+  <div id="ear"></div>
+  <button id="picture" aria-label="Listen"></button>
+  <div id="moon">🌙</div>
+  <div id="hands">
+    <button id="yes" aria-label="She said it">✓</button>
+    <button id="skip" aria-label="Move on">→</button>
+  </div>
+  <button id="gate" aria-label="Grown-ups"></button>
+</div>
+
+<!-- ─────────── their side ─────────── -->
+<div id="parent"><div class="wrap">
+
+  <div>
+    <div class="eyebrow" id="dayline">Day 1 · not started</div>
+    <h1 id="oneline">Eleven minutes a day.<br><b>That is the whole method.</b></h1>
+  </div>
+
+  <button class="act big" id="begin">Start today</button>
+
+  <div class="panel" id="dinnerPanel" style="display:none">
+    <div class="hd">Four words to use out loud at dinner</div>
+    <div id="dinner"></div>
+  </div>
+
+  <div class="panel">
+    <div class="hd">Said back correctly, unprompted</div>
+    <div class="bars" id="bars"></div>
+    <div class="total"><span>Total spoken vocabulary</span><b id="grand">0</b></div>
+  </div>
+
+  <div>
+    <h2>Languages in rotation</h2>
+    <p class="sub">The screen turns a different colour for each one. She cannot read a label, but she learns the green room is where a shoe is called <em>kutsu</em>.</p>
+    <div class="chips" id="chips" style="margin-top:13px"></div>
+  </div>
+
+  <div>
+    <h2>Your voices</h2>
+    <p class="sub">Hold the mic and say the word. Recorded words play in your voice instead of the robot's. Anything you skip falls back to speech synthesis.</p>
+    <div class="panel" style="margin-top:13px">
+      <div class="voices">
+        <div class="who"><input type="text" id="nameA" value="Dad" maxlength="10"></div>
+        <div class="who"><input type="text" id="nameB" value="Mum" maxlength="10"></div>
+        <select id="recWho"></select>
+        <select id="recLang"></select>
+        <span class="note" id="recCount"></span>
+      </div>
+      <div class="reclist" id="reclist"></div>
+    </div>
+  </div>
+
+  <div>
+    <h2>Check this device</h2>
+    <p class="sub">Run this before she sits down. Each language gets tested the way she will actually use it: the voice speaks, then the microphone listens for you saying the word back.</p>
+    <div class="panel" style="margin-top:13px">
+      <div class="hd" id="diagHd">Not run yet</div>
+      <div id="diagRows"></div>
+    </div>
+    <div class="acts" style="margin-top:13px">
+      <button class="act" id="diagRun">Run the check</button>
+      <button class="act ghost" id="diagCopy">Copy report</button>
+    </div>
+  </div>
+
+  <div>
+    <h2>Tomorrow</h2>
+    <p class="sub">Copy tonight's log into Claude with the daily-lesson prompt. Paste the twenty cards it hands back. That second prompt is why this still gets opened on day 94.</p>
+    <div class="acts" style="margin-top:13px">
+      <button class="act" id="copyPrompt">Copy tomorrow's prompt</button>
+      <button class="act ghost" id="pastePlan">Paste tomorrow's plan</button>
+      <button class="act ghost" id="dlLog">Save log</button>
+    </div>
+  </div>
+
+  <div>
+    <h2>Keeping it offline</h2>
+    <p class="sub">Save the voice pack to the iPad, then load it back after you copy this file across. Nothing here talks to a server.</p>
+    <div class="acts" style="margin-top:13px">
+      <button class="act ghost" id="dlVoices">Save voice pack</button>
+      <button class="act ghost" id="upVoices">Load voice pack</button>
+      <button class="act ghost" id="reset">Start over</button>
+    </div>
+    <input type="file" id="filein" accept="application/json" class="hide">
+  </div>
+
+  <div class="note" id="cap"></div>
+  <button class="act ghost" id="back">Back to her screen</button>
+
+</div></div>
+
+<dialog id="dlg" style="border:0;border-radius:22px;padding:0;max-width:560px;width:92vw;background:#FBF9FD">
+<form method="dialog" style="padding:22px;display:flex;flex-direction:column;gap:13px">
+  <h2 id="dlgTitle">Paste tomorrow's plan</h2>
+  <textarea id="dlgText" spellcheck="false"></textarea>
+  <div class="acts">
+    <button class="act" value="ok" id="dlgOk">Load it</button>
+    <button class="act ghost" value="x">Cancel</button>
+  </div>
+</form></dialog>
+
+<div id="toast"></div>
+
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+
+/* ══ 0. native Android, when it is there ══════════════════════════════
+   A WebView has no SpeechRecognition and unreliable speechSynthesis, so on
+   Android both come from the platform through AndroidBridge. Everything
+   below degrades to the plain web APIs when that object is absent. */
+const NB = window.AndroidBridge || null;
+let NCAP = null;
+if(NB){ try{ NCAP = JSON.parse(NB.capabilities()); }catch(e){ NCAP=null; } }
+
+let ttsSeq = 0; const ttsWaiting = {};
+window.__ttsDone = (id, ok)=>{ const f=ttsWaiting[id]; if(f){ delete ttsWaiting[id]; f(!!ok); } };
+window.__ttsReady = ()=>{ if(NB){ try{ NCAP=JSON.parse(NB.capabilities()); }catch(e){} } };
+window.__micGranted = ()=>{};
+let asrHit = null;
+window.__asrHeard = txt=>{ if(asrHit) asrHit(txt); };
+const nativeSpeak = (text,langTag)=>new Promise(res=>{
+  const id = ++ttsSeq;
+  ttsWaiting[id]=res;
+  try{ NB.speak(text, langTag, id); }catch(e){ delete ttsWaiting[id]; res(false); }
+  setTimeout(()=>{ if(ttsWaiting[id]){ delete ttsWaiting[id]; res(true); } }, 6000);
+});
+
+/* ══ 1. the same thirty objects, in all four ══ */
+const OBJ=[
+["cup","🥤","cup","taza",["コップ","koppu"],["杯子","beizi"],"when you hand her the cup at dinner"],
+["dog","🐶","dog","perro",["いぬ","inu"],["狗","gou"],"the next dog you pass on the walk"],
+["shoe","👟","shoe","zapato",["くつ","kutsu"],["鞋","xie"],"at the door, one shoe in each hand"],
+["door","🚪","door","puerta",["ドア","doa"],["门","men"],"every time she shuts one behind her"],
+["cat","🐱","cat","gato",["ねこ","neko"],["猫","mao"],"in a book, before you turn the page"],
+["ball","⚽","ball","pelota",["ボール","booru"],["球","qiu"],"before you roll it back to her"],
+["water","💧","water","agua",["みず","mizu"],["水","shui"],"when she asks for a drink"],
+["milk","🥛","milk","leche",["ミルク","miruku"],["牛奶","niunai"],"pouring, before she gets the cup"],
+["apple","🍎","apple","manzana",["りんご","ringo"],["苹果","pingguo"],"holding it up before you cut it"],
+["banana","🍌","banana","plátano",["バナナ","banana"],["香蕉","xiangjiao"],"while you peel it"],
+["bird","🐦","bird","pájaro",["とり","tori"],["鸟","niao"],"pointing out the window"],
+["fish","🐟","fish","pez",["さかな","sakana"],["鱼","yu"],"at the fish counter"],
+["hand","✋","hand","mano",["て","te"],["手","shou"],"washing hands before dinner"],
+["foot","🦶","foot","pie",["あし","ashi"],["脚","jiao"],"putting socks on"],
+["eye","👁️","eye","ojo",["め","me"],["眼睛","yanjing"],"in the mirror together"],
+["mouth","👄","mouth","boca",["くち","kuchi"],["嘴","zui"],"wiping her face after eating"],
+["hat","🎩","hat","sombrero",["ぼうし","booshi"],["帽子","maozi"],"on the way out the door"],
+["sock","🧦","sock","calcetín",["くつした","kutsushita"],["袜子","wazi"],"getting dressed in the morning"],
+["book","📖","book","libro",["ほん","hon"],["书","shu"],"when she picks tonight's story"],
+["car","🚗","car","coche",["くるま","kuruma"],["车","che"],"buckling her into the seat"],
+["chair","🪑","chair","silla",["いす","isu"],["椅子","yizi"],"as she climbs into hers"],
+["bed","🛏️","bed","cama",["ベッド","beddo"],["床","chuang"],"the last thing before lights out"],
+["spoon","🥄","spoon","cuchara",["スプーン","supuun"],["勺子","shaozi"],"handing it over, not before"],
+["bread","🍞","bread","pan",["パン","pan"],["面包","mianbao"],"passing her a piece at the table"],
+["egg","🥚","egg","huevo",["たまご","tamago"],["蛋","dan"],"cracking one at breakfast"],
+["flower","🌸","flower","flor",["はな","hana"],["花","hua"],"on the walk, before she picks it"],
+["tree","🌳","tree","árbol",["き","ki"],["树","shu"],"looking up from the buggy"],
+["moon","🌙","moon","luna",["つき","tsuki"],["月亮","yueliang"],"at the window after bath"],
+["star","⭐","star","estrella",["ほし","hoshi"],["星星","xingxing"],"lights out, curtains open"],
+["sun","☀️","sun","sol",["たいよう","taiyoo"],["太阳","taiyang"],"opening the curtains"]
+];
+const LANGS={
+ en:{name:"English",flag:"🇬🇧",code:"en-US",hex:"#6A4C93",on:"#F7F3FB"},
+ es:{name:"Spanish",flag:"🇪🇸",code:"es-ES",hex:"#DE5B49",on:"#FFF4F1"},
+ zh:{name:"Mandarin",flag:"🇨🇳",code:"zh-CN",hex:"#EFB135",on:"#2A2103"},
+ ja:{name:"Japanese",flag:"🇯🇵",code:"ja-JP",hex:"#2A8271",on:"#F0FBF7"}
+};
+const LK=["en","es","zh","ja"];
+const IDX={en:2,es:3,ja:4,zh:5};
+const ALL=[];
+OBJ.forEach(o=>LK.forEach(l=>{
+  const v=o[IDX[l]];
+  ALL.push({id:o[0]+":"+l,obj:o[0],lang:l,emoji:o[1],
+            say:Array.isArray(v)?v[0]:v, read:Array.isArray(v)?v[1]:v, moment:o[6]});
+}));
+const byId=id=>ALL.find(a=>a.id===id);
+
+/* ══ 2. state, and a store that survives being an offline file ══ */
+const BLANK={day:0,streak:0,lastDate:null,active:["en","es","zh","ja"],names:{a:"Dad",b:"Mum"},words:{},plan:null};
+let S=JSON.parse(JSON.stringify(BLANK));
+let VOICE={};                       // "cup:es:a" -> dataURL
+const mem={};                       // fallback when window.storage is absent
+
+const store={
+  async get(k){
+    if(NB){ try{ const v=NB.prefGet(k); if(v!==null&&v!==undefined) return v; }catch(e){} return null; }
+    try{ if(window.storage){const r=await window.storage.get(k); return r?r.value:null;} }catch(e){}
+    return k in mem?mem[k]:null;
+  },
+  async set(k,v){
+    if(NB){ try{ NB.prefSet(k,v); return; }catch(e){} }
+    mem[k]=v; try{ if(window.storage) await window.storage.set(k,v); }catch(e){}
+  },
+  async keys(p){
+    if(NB){ try{ return JSON.parse(NB.prefKeys(p)); }catch(e){ return []; } }
+    try{ if(window.storage){const r=await window.storage.list(p); return r?r.keys:[];} }catch(e){}
+    return Object.keys(mem).filter(k=>k.startsWith(p));
+  }
+};
+const saveState=()=>store.set("em:state",JSON.stringify(S));
+function w(id){ if(!S.words[id]) S.words[id]={seen:0,said:0,unprompted:0,lastDay:-99,missStreak:0,retired:false}; return S.words[id]; }
+
+async function boot(){
+  const raw=await store.get("em:state");
+  if(raw){ try{ S=Object.assign(JSON.parse(JSON.stringify(BLANK)),JSON.parse(raw)); }catch(e){} }
+  for(const k of await store.keys("em:v:")){ const v=await store.get(k); if(v) VOICE[k.slice(5)]=v; }
+}
+
+/* ══ 3. tomorrow's twenty ══ */
+const CARDS=20, ELEVEN=11*60*1000, NEW_MAX=2;
+const syl=e=>(e.read.match(/[aeiou]+/gi)||[]).length||Math.ceil(e.read.length/2);
+
+function buildQueue(){
+  if(S.plan&&S.plan.length){ const p=S.plan.map(byId).filter(Boolean); S.plan=null; saveState(); if(p.length) return p.slice(0,CARDS); }
+  const pool=ALL.filter(e=>S.active.includes(e.lang)&&!w(e.id).retired), d=S.day;
+  const seen=pool.filter(e=>w(e.id).seen>0);
+  const miss=seen.filter(e=>w(e.id).lastDay===d-1&&w(e.id).missStreak>0);
+  const stale=seen.filter(e=>!miss.includes(e)&&d-w(e.id).lastDay>=4).sort((a,b)=>w(a.id).lastDay-w(b.id).lastDay);
+  const warm=seen.filter(e=>!miss.includes(e)&&!stale.includes(e)).sort((a,b)=>w(a.id).lastDay-w(b.id).lastDay);
+  const fresh=pool.filter(e=>w(e.id).seen===0).sort((a,b)=>syl(a)-syl(b));
+  const q=[],push=a=>a.forEach(e=>{if(q.length<CARDS&&!q.includes(e))q.push(e)});
+  push(miss); push(stale); push(fresh.slice(0,Math.min(NEW_MAX,Math.max(0,CARDS-q.length)))); push(warm);
+  if(!q.length) push(fresh.slice(0,NEW_MAX));
+  for(let i=1;i<q.length;i++) if(q[i].lang===q[i-1].lang){
+    const j=q.findIndex((e,k)=>k>i&&e.lang!==q[i-1].lang);
+    if(j>-1){const t=q[i];q[i]=q[j];q[j]=t;}
+  }
+  return q;
+}
+const easierIn=(lang,avoid)=>ALL.filter(e=>e.lang===lang&&!w(e.id).retired&&w(e.id).seen===0&&!avoid.includes(e.id)).sort((a,b)=>syl(a)-syl(b))[0]||null;
+
+/* ══ 4. your voice first, the robot second ══ */
+let voices=[];
+const refresh=()=>{try{voices=speechSynthesis.getVoices()||[]}catch(e){voices=[]}};
+refresh(); if(window.speechSynthesis) speechSynthesis.onvoiceschanged=refresh;
+const pickVoice=c=>{
+  if(NB){ try{ return NB.hasVoice(c)?{lang:c,native:true}:null; }catch(e){ return null; } }
+  return voices.find(v=>v.lang&&v.lang.replace("_","-")===c)||voices.find(v=>v.lang&&v.lang.toLowerCase().startsWith(c.split("-")[0]));
+};
+
+let audioEl=null;
+function playClip(url){
+  return new Promise(res=>{
+    try{
+      if(audioEl){audioEl.pause();}
+      audioEl=new Audio(url);
+      audioEl.onended=()=>res(true); audioEl.onerror=()=>res(false);
+      audioEl.play().catch(()=>res(false));
+    }catch(e){res(false)}
+  });
+}
+function synth(e){
+  if(NB) return nativeSpeak(e.say, LANGS[e.lang].code);
+  return new Promise(res=>{
+    if(!window.speechSynthesis) return res(false);
+    try{speechSynthesis.cancel()}catch(_){}
+    const c=LANGS[e.lang].code,v=pickVoice(c);
+    if(!v) return res(false);
+    const u=new SpeechSynthesisUtterance(e.say);
+    u.lang=c; u.voice=v; u.rate=.68; u.pitch=1.06;
+    u.onend=()=>res(true); u.onerror=()=>res(false);
+    speechSynthesis.speak(u);
+  });
+}
+async function sayOnce(e){
+  const slots=["a","b"].filter(s=>VOICE[e.obj+":"+e.lang+":"+s]);
+  if(slots.length){
+    const s=slots[Math.floor(Math.random()*slots.length)];
+    if(await playClip(VOICE[e.obj+":"+e.lang+":"+s])) return true;
+  }
+  return synth(e);
+}
+async function say(e,times=2){
+  for(let i=0;i<times;i++){ if(ended||queue[idx]!==e) return; await sayOnce(e); if(i<times-1) await new Promise(r=>setTimeout(r,480)); }
+}
+
+/* ══ 5. hearing a three-year-old ══ */
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+let rec=null;
+const norm=s=>(s||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[^a-z0-9\u3040-\u30ff\u4e00-\u9fff]/g,"");
+function lev(a,b){const m=[...Array(a.length+1)].map((_,i)=>[i,...Array(b.length).fill(0)]);for(let j=0;j<=b.length;j++)m[0][j]=j;
+ for(let i=1;i<=a.length;i++)for(let j=1;j<=b.length;j++)m[i][j]=Math.min(m[i-1][j]+1,m[i][j-1]+1,m[i-1][j-1]+(a[i-1]===b[j-1]?0:1));return m[a.length][b.length];}
+function heard(t,e){
+  t=norm(t); if(t.length<1) return false;
+  for(const g of [norm(e.say),norm(e.read)]){
+    if(!g) continue;
+    if(t.includes(g)||g.includes(t)) return true;
+    if(lev(t,g)<=Math.max(1,Math.floor(g.length*.45))) return true;      // she will not say kutsu cleanly
+    if(g.length>=3&&t.length>=2&&t.slice(0,2)===g.slice(0,2)) return true;
+  }
+  return false;
+}
+function listen(e,hit){
+  if(NB){
+    if(!NCAP||!NCAP.asr) return false;
+    asrHit = txt=>{ if(heard(txt,e)) hit(); };
+    try{ NB.startListening(LANGS[e.lang].code); return true; }catch(_){ asrHit=null; return false; }
+  }
+  if(!SR) return false;
+  try{
+    rec=new SR(); rec.lang=LANGS[e.lang].code;
+    rec.interimResults=true; rec.continuous=true; rec.maxAlternatives=5;
+    rec.onresult=ev=>{let all="";for(let i=0;i<ev.results.length;i++)for(let k=0;k<ev.results[i].length;k++)all+=" "+ev.results[i][k].transcript;
+      if(heard(all,e)) hit();};
+    rec.onerror=()=>{}; rec.onend=()=>{};
+    rec.start(); return true;
+  }catch(_){return false}
+}
+const unlisten=()=>{
+  if(NB){ asrHit=null; try{ NB.stopListening(); }catch(e){} return; }
+  try{if(rec)rec.stop()}catch(e){}
+};
+
+/* ══ 6. eleven minutes ══ */
+let queue=[],idx=0,log=[],t0=0,cardT0=0,prompts=0,ended=true,busy=false,tapped=false,tmr=[];
+const clearT=()=>{tmr.forEach(clearTimeout);tmr=[]};
+const later=(f,ms)=>tmr.push(setTimeout(f,ms));
+function toast(m){const t=$("toast");t.textContent=m;t.classList.add("up");setTimeout(()=>t.classList.remove("up"),1900)}
+
+function startSession(){
+  queue=buildQueue(); if(!queue.length){toast("pick a language");return;}
+  idx=0; log=[]; t0=Date.now(); ended=false;
+  $("parent").classList.remove("on");
+  $("moon").classList.remove("on");
+  $("hands").style.display="flex";
+  card();
+}
+function card(){
+  clearT(); unlisten();
+  if(ended) return;
+  if(idx>=queue.length||Date.now()-t0>=ELEVEN) return finish();
+  const e=queue[idx]; busy=false; tapped=false; prompts=0; cardT0=Date.now();
+  document.documentElement.style.setProperty("--stage",LANGS[e.lang].hex);
+  document.documentElement.style.setProperty("--on",LANGS[e.lang].on);
+  const p=$("picture");
+  p.textContent=e.emoji; p.classList.remove("said"); p.classList.add("invite");
+  $("ear").classList.remove("on");
+  later(()=>{ if(!tapped&&!ended&&queue[idx]===e) heard0(e); },9000);   // she never tapped; nudge her
+}
+async function heard0(e){                                              // play, then open the ear
+  if(ended||queue[idx]!==e) return;
+  tapped=true;
+  $("picture").classList.remove("invite");
+  await say(e,2);
+  if(ended||queue[idx]!==e) return;
+  $("ear").classList.add("on");
+  listen(e,()=>advance(true,true));
+  later(()=>{ if(!busy&&queue[idx]===e){prompts++; say(e,1);} },7000);  // one quiet repeat
+  later(()=>{ if(!busy&&queue[idx]===e) advance(false); },19000);
+}
+$("picture").onclick=()=>{
+  const e=queue[idx];
+  if(ended||!e) return;
+  if(!tapped) heard0(e); else say(e,1);
+};
+function advance(said,unprompted){
+  if(busy||ended) return; busy=true;
+  clearT(); unlisten(); $("ear").classList.remove("on");
+  const e=queue[idx],st=w(e.id);
+  st.seen++; st.lastDay=S.day;
+  if(said){ st.said++; if(unprompted&&prompts===0) st.unprompted++; st.missStreak=0; }
+  else st.missStreak++;
+  log.push({card:idx+1,object:e.obj,language:e.lang,word:e.say,said:!!said,
+            unprompted:!!(said&&unprompted&&prompts===0),prompts,
+            seconds:Math.round((Date.now()-cardT0)/1000),at:new Date().toISOString()});
+  if(said){ $("picture").classList.add("said"); chime(); }
+  else{
+    const at=idx+3;                                                    // comes back quietly, three turns later
+    if(at<CARDS&&!queue.slice(idx+1).includes(e)) queue.splice(Math.min(at,queue.length),0,e);
+    if(st.missStreak>=3){ st.retired=true; const s=easierIn(e.lang,queue.map(q=>q.id)); if(s) queue.push(s); }
+  }
+  idx++; later(card,said?900:300);
+}
+$("yes").onclick=()=>advance(true,false);
+$("skip").onclick=()=>advance(false);
+
+let ac=null;
+function chime(){
+  try{
+    ac=ac||new (window.AudioContext||window.webkitAudioContext)();
+    const t=ac.currentTime;
+    [659.25,987.77].forEach((f,i)=>{
+      const o=ac.createOscillator(),g=ac.createGain();
+      o.type="sine";o.frequency.value=f;
+      g.gain.setValueAtTime(0,t+i*.1);g.gain.linearRampToValueAtTime(.12,t+i*.1+.02);
+      g.gain.exponentialRampToValueAtTime(.001,t+i*.1+.5);
+      o.connect(g);g.connect(ac.destination);o.start(t+i*.1);o.stop(t+i*.1+.55);
+    });
+  }catch(e){}
+}
+
+/* ══ 7. the end, said without a word ══ */
+function finish(){
+  if(ended) return; ended=true;
+  clearT(); unlisten(); try{speechSynthesis.cancel()}catch(e){}
+  $("ear").classList.remove("on"); $("picture").classList.remove("invite");
+  $("hands").style.display="none";
+  document.documentElement.style.setProperty("--stage","var(--night)");
+  document.documentElement.style.setProperty("--on","#EBE7F1");
+  $("picture").textContent="";
+  $("picture").style.background="transparent"; $("picture").style.boxShadow="none";
+  $("moon").classList.add("on");
+
+  const today=new Date().toISOString().slice(0,10);
+  const y=new Date(Date.now()-864e5).toISOString().slice(0,10);
+  S.streak=(S.lastDate===y||S.lastDate===today)?(S.lastDate===today?S.streak:S.streak+1):1;
+  S.lastDate=today; S.day++;
+  saveState(); paintParent();
+  later(()=>{ $("picture").style.background=""; $("picture").style.boxShadow=""; },600);
+}
+
+/* ══ 8. their screen ══ */
+function openParent(){ paintParent(); $("parent").classList.add("on"); }
+let holdT=null;
+$("gate").addEventListener("pointerdown",()=>{holdT=setTimeout(openParent,1600)});
+["pointerup","pointerleave","pointercancel"].forEach(ev=>$("gate").addEventListener(ev,()=>clearTimeout(holdT)));
+$("back").onclick=()=>$("parent").classList.remove("on");
+$("begin").onclick=()=>{ if(ac&&ac.state==="suspended")ac.resume(); startSession(); };
+document.addEventListener("keydown",e=>{
+  if(e.key==="p"||e.key==="P"){ $("parent").classList.contains("on")?$("parent").classList.remove("on"):openParent(); }
+  if($("parent").classList.contains("on")||ended) return;
+  if(e.key===" "||e.key==="Enter"){e.preventDefault();advance(true,false)}
+  if(e.key==="ArrowRight"){e.preventDefault();advance(false)}
+});
+
+function paintParent(){
+  $("dayline").textContent = S.day===0 ? "Day 1 · not started"
+    : "Day "+S.day+" · "+S.streak+" day streak · offline";
+
+  const said=log.filter(l=>l.said), missed=log.filter(l=>!l.said);
+  if(log.length){
+    const has=said[said.length-1], not=missed[0];
+    $("oneline").innerHTML = has&&not ? `She has <b>${has.word}</b> but not <b>${not.word}</b>.`
+      : has ? `She said every word back. <b>${has.word}</b> came easiest.`
+      : not ? `Nothing out loud today. Try <b>${not.word}</b> at dinner.` : "";
+  }
+  $("begin").textContent = log.length ? "Run it again" : "Start today";
+
+  // per-language totals, unprompted only — the number on the receipts card
+  const tot={}; let grand=0, max=1;
+  LK.forEach(l=>{
+    tot[l]=Object.entries(S.words).filter(([k,v])=>k.endsWith(":"+l)).reduce((a,[,v])=>a+v.unprompted,0);
+    grand+=tot[l]; max=Math.max(max,tot[l]);
+  });
+  $("bars").innerHTML=LK.map(l=>`<div class="bar">
+      <span>${LANGS[l].flag} ${LANGS[l].name.slice(0,8)}</span>
+      <span class="track"><span class="fill" style="width:${Math.round(tot[l]/max*100)}%;background:${LANGS[l].hex}"></span></span>
+      <span class="n">${tot[l]}</span></div>`).join("");
+  $("grand").textContent=grand;
+
+  if(log.length){
+    $("dinnerPanel").style.display="";
+    const pick=[],seen=new Set();
+    [...said.slice(-2),...missed.slice(0,2),...log].forEach(l=>{ if(pick.length<4&&!seen.has(l.word)){seen.add(l.word);pick.push(l);} });
+    $("dinner").innerHTML=pick.map(l=>{
+      const e=ALL.find(a=>a.obj===l.object&&a.lang===l.language)||{};
+      return `<div class="row"><span class="tag" style="background:${LANGS[l.language].hex}"></span>
+        <span class="e">${e.emoji||""}</span>
+        <span class="t"><strong>${l.word}</strong><small>${l.said?"she said this today":"she did not say this today"} · ${e.moment||"at dinner"}</small></span></div>`;
+    }).join("");
+  }
+
+  $("chips").innerHTML="";
+  LK.forEach(k=>{
+    const b=document.createElement("button"); b.className="chip"; b.type="button";
+    b.style.setProperty("--c",LANGS[k].hex); b.style.setProperty("--oc",LANGS[k].on);
+    b.setAttribute("aria-pressed",S.active.includes(k));
+    b.innerHTML=`<i></i>${LANGS[k].flag} ${LANGS[k].name}`;
+    b.onclick=()=>{ const on=S.active.includes(k); if(on&&S.active.length===1) return;
+      S.active=on?S.active.filter(x=>x!==k):[...S.active,k].sort((a,b)=>LK.indexOf(a)-LK.indexOf(b));
+      saveState(); paintParent(); };
+    $("chips").appendChild(b);
+  });
+
+  const bits=[];
+  if(NB){
+    bits.push("On "+(NCAP&&NCAP.device?NCAP.device:"this device")+", Android API "+(NCAP?NCAP.api:"?")+".");
+    bits.push(NCAP&&NCAP.asr
+      ? "Speech recognition is on-device. Offline recognition has to be downloaded per language in Settings → System → Languages → Voice input."
+      : "No speech recogniser on this device, so use ✓ under the picture when she says it.");
+    bits.push(NCAP&&NCAP.tts?"Text to speech is ready.":"No text-to-speech engine responded — record the words in your own voices.");
+  } else {
+    bits.push(SR?"Microphone permission is asked once, on the first tap.":"This browser has no speech recognition, so use ✓ under the picture when she says it. Safari is usually the reason.");
+  }
+  const missing=LK.filter(l=>S.active.includes(l)&&!pickVoice(LANGS[l].code)&&!Object.keys(VOICE).some(k=>k.includes(":"+l+":")));
+  if(missing.length) bits.push("No installed voice for "+missing.map(l=>LANGS[l].name).join(" or ")+" — record those words yourself, or those cards will play silence.");
+  bits.push((NB||window.storage)?"Progress and recordings are saved on this device.":"Nothing is being written to disk here. Save the voice pack and the log before you close the tab.");
+  $("cap").textContent=bits.join(" ");
+  paintRec();
+  paintDiag();
+}
+
+/* ══ 9. recording your voices ══ */
+let mediaRec=null,chunks=[],recKey=null;
+function fillSelects(){
+  $("recWho").innerHTML=`<option value="a">${S.names.a}</option><option value="b">${S.names.b}</option>`;
+  $("recLang").innerHTML=LK.map(l=>`<option value="${l}">${LANGS[l].flag} ${LANGS[l].name}</option>`).join("");
+}
+$("nameA").oninput=e=>{S.names.a=e.target.value||"Voice 1";saveState();fillSelects()};
+$("nameB").oninput=e=>{S.names.b=e.target.value||"Voice 2";saveState();fillSelects()};
+$("recLang").onchange=paintRec; $("recWho").onchange=paintRec;
+
+function paintRec(){
+  $("nameA").value=S.names.a; $("nameB").value=S.names.b;
+  if(!$("recWho").options.length) fillSelects();
+  const lang=$("recLang").value||"en", who=$("recWho").value||"a";
+  const done=OBJ.filter(o=>VOICE[o[0]+":"+lang+":"+who]).length;
+  $("recCount").textContent=done+" / "+OBJ.length+" recorded";
+  $("reclist").innerHTML="";
+  OBJ.forEach(o=>{
+    const e=ALL.find(a=>a.obj===o[0]&&a.lang===lang), key=o[0]+":"+lang+":"+who;
+    const row=document.createElement("div"); row.className="row";
+    row.innerHTML=`<span class="e">${o[1]}</span>
+      <span class="t"><strong>${e.say}</strong><small>${e.read!==e.say?e.read:"&nbsp;"}</small></span>`;
+    const b=document.createElement("button");
+    b.className="mic"+(VOICE[key]?" has":""); b.textContent=VOICE[key]?"▶":"●"; b.type="button";
+    b.title="Hold to record";
+    let hold=null;
+    const down=ev=>{ ev.preventDefault(); hold=setTimeout(()=>{hold=null;startRec(key,b)},350); };
+    const up=ev=>{ ev.preventDefault();
+      if(hold){clearTimeout(hold);hold=null; if(VOICE[key]) playClip(VOICE[key]); }
+      else stopRec(); };
+    b.addEventListener("pointerdown",down);
+    ["pointerup","pointerleave","pointercancel"].forEach(x=>b.addEventListener(x,up));
+    row.appendChild(b);
+    $("reclist").appendChild(row);
+  });
+}
+async function startRec(key,btn){
+  try{
+    const s=await navigator.mediaDevices.getUserMedia({audio:true});
+    const mt=["audio/webm;codecs=opus","audio/mp4","audio/webm"].find(t=>window.MediaRecorder&&MediaRecorder.isTypeSupported(t));
+    mediaRec=new MediaRecorder(s,mt?{mimeType:mt,audioBitsPerSecond:32000}:undefined);
+    chunks=[]; recKey=key; btn.classList.add("rec"); btn.textContent="■";
+    mediaRec.ondataavailable=e=>chunks.push(e.data);
+    mediaRec.onstop=async()=>{
+      s.getTracks().forEach(t=>t.stop());
+      const blob=new Blob(chunks,{type:mediaRec.mimeType});
+      const fr=new FileReader();
+      fr.onload=async()=>{ VOICE[recKey]=fr.result; await store.set("em:v:"+recKey,fr.result); paintRec(); };
+      fr.readAsDataURL(blob);
+    };
+    mediaRec.start();
+    setTimeout(()=>{ if(mediaRec&&mediaRec.state==="recording") stopRec(); },4000);
+  }catch(e){ toast("no microphone"); }
+}
+function stopRec(){ try{ if(mediaRec&&mediaRec.state==="recording") mediaRec.stop(); }catch(e){} mediaRec=null; }
+
+/* ══ 9b. what this particular tablet can actually do ══
+   Every claim on this panel is measured on the device, not assumed. The two
+   per-language tests need you in the room, because only you can say whether a
+   voice really came out of the speaker. */
+const DIAG={ran:false,mic:null,peak:0,asr:null,store:null,rec:null,langs:{}};
+LK.forEach(l=>DIAG.langs[l]={voice:null,spoke:null,asr:null,text:""});
+const TESTWORD=l=>ALL.find(a=>a.obj==="shoe"&&a.lang===l);
+
+/* like listen(), but hands back whatever it thought it heard rather than a verdict */
+function listenRaw(e,onText){
+  if(NB){
+    if(!NCAP||!NCAP.asr) return false;
+    asrHit=txt=>onText(txt);
+    try{ NB.startListening(LANGS[e.lang].code); return true; }catch(_){ asrHit=null; return false; }
+  }
+  if(!SR) return false;
+  try{
+    rec=new SR(); rec.lang=LANGS[e.lang].code;
+    rec.interimResults=true; rec.continuous=true; rec.maxAlternatives=5;
+    rec.onresult=ev=>{let all="";for(let i=0;i<ev.results.length;i++)for(let k=0;k<ev.results[i].length;k++)all+=" "+ev.results[i][k].transcript;onText(all);};
+    rec.onerror=()=>{}; rec.onend=()=>{};
+    rec.start(); return true;
+  }catch(_){ return false; }
+}
+
+const recorded=l=>OBJ.some(o=>VOICE[o[0]+":"+l+":a"]||VOICE[o[0]+":"+l+":b"]);
+
+async function diagRun(){
+  try{
+    const probe="em:diag", stamp="t"+Date.now();
+    await store.set(probe,stamp);
+    const back=await store.get(probe);
+    DIAG.store = back===stamp ? (NB?"device":(window.storage?"browser":"memory")) : "failed";
+  }catch(e){ DIAG.store="failed"; }
+  DIAG.asr = NB ? !!(NCAP&&NCAP.asr) : !!SR;
+  DIAG.rec = !!(window.MediaRecorder && navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+  LK.forEach(l=>{ DIAG.langs[l].voice = !!pickVoice(LANGS[l].code); });
+  DIAG.ran=true;
+  paintDiag();
+  await diagMic();
+}
+
+async function diagMic(){
+  DIAG.mic="testing"; DIAG.peak=0; paintDiag();
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+    ac=ac||new (window.AudioContext||window.webkitAudioContext)();
+    if(ac.state==="suspended"){ try{ await ac.resume(); }catch(e){} }
+    const src=ac.createMediaStreamSource(stream), an=ac.createAnalyser();
+    an.fftSize=1024; src.connect(an);
+    const buf=new Uint8Array(an.fftSize), t0=Date.now();
+    const loop=()=>{
+      an.getByteTimeDomainData(buf);
+      let p=0; for(let i=0;i<buf.length;i++){ const d=Math.abs(buf[i]-128)/128; if(d>p) p=d; }
+      if(p>DIAG.peak) DIAG.peak=p;
+      const bar=$("micbar"); if(bar) bar.style.width=Math.round(Math.min(1,p*2.4)*100)+"%";
+      if(Date.now()-t0<4500) requestAnimationFrame(loop);
+      else{
+        stream.getTracks().forEach(x=>x.stop());
+        DIAG.mic = DIAG.peak>0.045 ? "ok" : "quiet";
+        const bar2=$("micbar"); if(bar2) bar2.style.width="0%";
+        paintDiag();
+      }
+    };
+    loop();
+  }catch(e){ DIAG.mic="denied"; paintDiag(); }
+}
+
+async function diagSpeak(l){
+  const d=DIAG.langs[l];
+  d.spoke="speaking"; paintDiag();
+  const e=TESTWORD(l);
+  const ok=await sayOnce(e);
+  d.spoke = ok ? "confirm" : "silent";
+  paintDiag();
+}
+function diagListen(l){
+  const d=DIAG.langs[l], e=TESTWORD(l);
+  unlisten();
+  d.asr="listening"; d.text=""; paintDiag();
+  const started=listenRaw(e,txt=>{
+    const t=(txt||"").trim();
+    if(!t) return;
+    d.text=t.slice(0,44);
+    d.asr = heard(t,e) ? "matched" : "heard";
+    paintDiag();
+  });
+  if(!started){ d.asr="unavailable"; paintDiag(); return; }
+  setTimeout(()=>{
+    unlisten();
+    if(d.asr==="listening"){ d.asr="silent"; paintDiag(); }
+  },9000);
+}
+
+function verdict(l){
+  const d=DIAG.langs[l];
+  if(!DIAG.ran) return ["","untested"];
+  if(!d.voice && !recorded(l)) return ["bad","record this one"];
+  if(!d.voice && recorded(l))  return ["good","your voice"];
+  if(d.spoke==="silent")       return ["bad","no sound came out"];
+  if(d.asr==="matched")        return ["good","ready"];
+  if(d.asr==="heard")          return ["warn","hears, did not match"];
+  if(d.asr==="silent"||d.asr==="unavailable") return ["warn","you tap ✓"];
+  return ["","voice installed"];
+}
+
+function pill(cls,txt){ const s=document.createElement("span"); s.className="pill "+(cls||""); s.textContent=txt; return s; }
+function line(label,sub,p){
+  const r=document.createElement("div"); r.className="row";
+  const t=document.createElement("span"); t.className="t";
+  t.innerHTML="<strong>"+label+"</strong><small>"+sub+"</small>";
+  r.appendChild(t); if(p) r.appendChild(p); return r;
+}
+
+function paintDiag(){
+  const box=$("diagRows"); if(!box) return;
+  box.innerHTML="";
+  if(!DIAG.ran){
+    $("diagHd").textContent="Not run yet";
+    box.appendChild(line("Nothing measured","Press Run the check. It takes about five seconds, then two taps per language.",null));
+    return;
+  }
+  $("diagHd").textContent = NB
+    ? (NCAP&&NCAP.device?NCAP.device:"Android")+" · API "+(NCAP?NCAP.api:"?")
+    : "Browser · "+(navigator.platform||"unknown");
+
+  const micTxt={testing:["wait","say something"],ok:["good","hears you"],quiet:["warn","nothing came in"],denied:["bad","permission refused"]}[DIAG.mic]||["","not tested"];
+  const micRow=line("Microphone",
+    DIAG.mic==="testing" ? "Talk normally for a few seconds." :
+    DIAG.mic==="quiet"   ? "The mic opened but stayed near silent. Check the case is not over it." :
+    DIAG.mic==="denied"  ? "Grant the microphone in system settings, then run this again." :
+    "Peak level "+Math.round(DIAG.peak*100)+"%.", pill(micTxt[0],micTxt[1]));
+  const m=document.createElement("div"); m.className="meter"; m.innerHTML='<span id="micbar"></span>';
+  micRow.querySelector(".t").appendChild(m);
+  box.appendChild(micRow);
+
+  box.appendChild(line("Speech recogniser",
+    DIAG.asr ? "Present. Whether it works offline is the per-language test below."
+             : "Absent. She can still use the app; you press ✓ when she says the word.",
+    pill(DIAG.asr?"good":"warn", DIAG.asr?"present":"missing")));
+
+  box.appendChild(line("Recording your voices",
+    DIAG.rec ? "You can record the words in your own voice." : "No recorder here, so every word falls back to synthesis.",
+    pill(DIAG.rec?"good":"warn", DIAG.rec?"available":"missing")));
+
+  const st={device:["good","on device"],browser:["good","saved"],memory:["bad","lost on close"],failed:["bad","failed"]}[DIAG.store]||["","unknown"];
+  box.appendChild(line("Keeping her progress",
+    DIAG.store==="memory" ? "Nothing is being written to disk. Save the log and voice pack before closing."
+    : DIAG.store==="failed" ? "The store did not read back what was written to it."
+    : "Progress and recordings survive a restart.", pill(st[0],st[1])));
+
+  LK.forEach(l=>{
+    const d=DIAG.langs[l], v=verdict(l);
+    const r=document.createElement("div"); r.className="row";
+    const tag=document.createElement("span"); tag.className="tag"; tag.style.background=LANGS[l].hex;
+    const t=document.createElement("span"); t.className="t";
+    let sub;
+    if(d.spoke==="speaking") sub="Listen. Did a voice say “"+TESTWORD(l).say+"”?";
+    else if(d.spoke==="confirm") sub="Did you hear it?";
+    else if(d.asr==="listening") sub="Now say “"+TESTWORD(l).say+"” out loud.";
+    else if(d.text) sub="It heard: “"+d.text+"”";
+    else if(!d.voice) sub="No installed voice for this language.";
+    else sub="Voice installed. 🔊 speaks the test word, 🎤 listens for you.";
+    t.innerHTML="<strong>"+LANGS[l].flag+" "+LANGS[l].name+"</strong><small>"+sub+"</small>";
+    r.appendChild(tag); r.appendChild(t);
+
+    const pair=document.createElement("div"); pair.className="pair";
+    if(d.spoke==="confirm"){
+      const y=document.createElement("button"); y.className="tiny"; y.textContent="✓"; y.title="I heard it";
+      y.onclick=()=>{ d.spoke="ok"; paintDiag(); };
+      const nn=document.createElement("button"); nn.className="tiny"; nn.textContent="✕"; nn.title="Nothing came out";
+      nn.onclick=()=>{ d.spoke="silent"; paintDiag(); };
+      pair.appendChild(y); pair.appendChild(nn);
+    } else {
+      const sp=document.createElement("button"); sp.className="tiny"+(d.spoke==="speaking"?" live":""); sp.textContent="🔊";
+      sp.title="Speak the test word"; sp.onclick=()=>diagSpeak(l);
+      const li=document.createElement("button"); li.className="tiny"+(d.asr==="listening"?" live":""); li.textContent="🎤";
+      li.title="Listen for the test word"; li.onclick=()=>diagListen(l);
+      pair.appendChild(sp); pair.appendChild(li);
+    }
+    r.appendChild(pair);
+    r.appendChild(pill(v[0],v[1]));
+    box.appendChild(r);
+  });
+}
+
+function diagReport(){
+  const L=[];
+  L.push("Eleven Minutes — device check");
+  L.push(new Date().toISOString());
+  L.push(NB ? "Android "+(NCAP?NCAP.api:"?")+" · "+(NCAP&&NCAP.device?NCAP.device:"?") : "Browser · "+navigator.userAgent);
+  L.push("microphone: "+(DIAG.mic||"not tested")+" (peak "+Math.round(DIAG.peak*100)+"%)");
+  L.push("recogniser: "+(DIAG.asr?"present":"missing"));
+  L.push("recording:  "+(DIAG.rec?"available":"missing"));
+  L.push("storage:    "+(DIAG.store||"not tested"));
+  L.push("");
+  LK.forEach(l=>{
+    const d=DIAG.langs[l];
+    L.push(LANGS[l].name+": voice="+(d.voice?"installed":"missing")
+      +" spoke="+(d.spoke||"-")+" asr="+(d.asr||"-")
+      +(d.text?" heard=\""+d.text+"\"":"")
+      +" recordings="+(recorded(l)?"yes":"no")
+      +" → "+verdict(l)[1]);
+  });
+  return L.join("\n");
+}
+
+$("diagRun").onclick=diagRun;
+$("diagCopy").onclick=async()=>{
+  const t=diagReport();
+  if(NB){ try{ NB.copyToClipboard(t); toast("report copied"); return; }catch(e){} }
+  try{ await navigator.clipboard.writeText(t); toast("report copied"); }
+  catch(e){ $("dlgTitle").textContent="Device check"; $("dlgText").value=t; $("dlgOk").style.display="none"; $("dlg").showModal(); $("dlgText").select(); }
+};
+
+/* ══ 10. the log, the prompt, the pack ══ */
+const logJSON=()=>JSON.stringify({
+  day:S.day,date:new Date().toISOString().slice(0,10),streak:S.streak,
+  activeLanguages:S.active,cards:log,
+  wordState:Object.fromEntries(Object.entries(S.words).map(([k,v])=>[k,{seen:v.seen,said:v.said,unprompted:v.unprompted,lastDay:v.lastDay,missStreak:v.missStreak,retired:v.retired}])),
+  catalogue:ALL.filter(e=>S.active.includes(e.lang)).map(e=>e.id)
+},null,2);
+
+const PROMPT2=`Here is today's log of every word she said back and every one she missed. Build tomorrow's eleven minutes from it.
+
+Order tomorrow's twenty cards like this:
+1. Today's misses first.
+2. Then the words she has not heard in four days.
+3. Then two new ones. Never more than two.
+
+If a word has a missStreak of 3 or more, drop it and pick an easier object in the same language — fewer syllables, simpler consonants. Never put the same language on two cards in a row.
+
+Return ONLY a JSON array of card ids in order, taken from "catalogue". Nothing else. Example: ["shoe:es","dog:ja","cup:zh"]
+
+Then, separately, give me and my wife four words to use out loud at dinner tonight, and tell us exactly when to say them.
+
+LOG:
+`;
+function download(name,text){
+  if(NB){                                   // blob downloads do nothing in a WebView
+    try{ const p=NB.saveFile(name,text); toast(p?"saved to Documents":"could not save"); }catch(e){ toast("could not save"); }
+    return;
+  }
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob([text],{type:"application/json"}));
+  a.download=name; a.click(); URL.revokeObjectURL(a.href);
+}
+$("dlLog").onclick=()=>{download("day-"+S.day+"-log.json",logJSON());toast("log saved")};
+$("dlVoices").onclick=()=>{download("voice-pack.json",JSON.stringify({names:S.names,clips:VOICE}));toast("voice pack saved")};
+$("upVoices").onclick=()=>$("filein").click();
+$("filein").onchange=async ev=>{
+  const f=ev.target.files[0]; if(!f) return;
+  try{
+    const d=JSON.parse(await f.text());
+    if(d.names) S.names=d.names;
+    for(const [k,v] of Object.entries(d.clips||{})){ VOICE[k]=v; await store.set("em:v:"+k,v); }
+    saveState(); paintParent(); toast(Object.keys(d.clips||{}).length+" clips loaded");
+  }catch(e){ toast("that file didn't parse"); }
+  ev.target.value="";
+};
+$("copyPrompt").onclick=async()=>{
+  const t=PROMPT2+logJSON();
+  if(NB){ try{ NB.copyToClipboard(t); toast("prompt copied"); return; }catch(e){} }
+  try{ await navigator.clipboard.writeText(t); toast("prompt copied"); }
+  catch(e){ $("dlgTitle").textContent="Copy this"; $("dlgText").value=t; $("dlgOk").style.display="none"; $("dlg").showModal(); $("dlgText").select(); }
+};
+$("pastePlan").onclick=()=>{ $("dlgTitle").textContent="Paste tomorrow's plan"; $("dlgText").value=""; $("dlgOk").style.display=""; $("dlg").showModal(); };
+$("dlg").addEventListener("close",()=>{
+  if($("dlg").returnValue!=="ok") return;
+  try{
+    const raw=$("dlgText").value.trim(), m=raw.match(/\[[\s\S]*?\]/);
+    const good=JSON.parse(m?m[0]:raw).filter(id=>byId(id));
+    if(!good.length) throw 0;
+    S.plan=good; saveState(); toast(good.length+" cards loaded");
+  }catch(e){ toast("that wasn't a card list"); }
+});
+$("reset").onclick=async()=>{ S=JSON.parse(JSON.stringify(BLANK)); if(NB){try{NB.prefClear()}catch(e){}} VOICE={}; await saveState(); paintParent(); toast("cleared"); };
+
+/* ══ start ══ */
+(async function(){
+  await boot();
+  fillSelects();
+  $("hands").style.display="none";
+  $("picture").textContent="👶";
+  $("moon").classList.remove("on");
+  openParent();
+})();
+</script>
+</body>
+</html>
