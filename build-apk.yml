@@ -1,82 +1,73 @@
-name: Build APK
-
-on:
-  push:
-    branches: [ main, master ]
-  workflow_dispatch:
-    inputs:
-      variant:
-        description: "Which build to produce"
-        required: true
-        default: debug
-        type: choice
-        options: [ debug, release ]
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Generate the Gradle wrapper
-        run: gradle wrapper --gradle-version 8.7 --no-daemon
-
-      - name: Build debug APK
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.variant == 'debug' }}
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
-
-      # A release APK needs a keystore. Create one locally:
-      #   keytool -genkey -v -keystore eleven.jks -keyalg RSA -keysize 2048 \
-      #           -validity 10000 -alias eleven
-      # Then add four repo secrets: KEYSTORE_B64 (base64 of the .jks),
-      # KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD.
-      - name: Decode keystore
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.variant == 'release' }}
-        env:
-          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+      - name: Rebuild the project tree from the flat upload
         run: |
-          if [ -z "$KEYSTORE_B64" ]; then
-            echo "::error::No KEYSTORE_B64 secret set. Build the debug variant instead, or add the four signing secrets."
-            exit 1
-          fi
-          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/eleven.jks"
+          set -e
+          rm -f build.gradle "build (1).gradle" download
 
-      - name: Build release APK
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.variant == 'release' }}
-        env:
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: |
-          ./gradlew assembleRelease --no-daemon --stacktrace \
-            -Pandroid.injected.signing.store.file="$RUNNER_TEMP/eleven.jks" \
-            -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
-            -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
-            -Pandroid.injected.signing.key.password="$KEY_PASSWORD"
+          mkdir -p app/src/main/java/com/msb/elevenminutes \
+                   app/src/main/res/values app/src/main/res/xml \
+                   app/src/main/res/drawable app/src/main/res/mipmap-anydpi-v26 \
+                   app/src/main/assets gradle/wrapper
 
-      - name: Collect the APK
-        run: |
-          mkdir -p out
-          find app/build/outputs/apk -name '*.apk' -exec cp {} out/ \;
-          ls -lh out
+          mv AndroidManifest.xml            app/src/main/
+          mv Bridge.java MainActivity.java  app/src/main/java/com/msb/elevenminutes/
+          mv index.html                     app/src/main/assets/
+          mv strings.xml themes.xml colors.xml           app/src/main/res/values/
+          mv backup_rules.xml data_extraction_rules.xml  app/src/main/res/xml/
+          mv ic_launcher_foreground.xml     app/src/main/res/drawable/
+          mv ic_launcher.xml                app/src/main/res/mipmap-anydpi-v26/
+          mv gradle-wrapper.properties      gradle/wrapper/
+          mv proguard-rules.pro             app/
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: eleven-minutes-apk
-          path: out/*.apk
-          if-no-files-found: error
-          retention-days: 30
+          cat > build.gradle <<'ROOT'
+          plugins {
+              id 'com.android.application' version '8.5.2' apply false
+          }
+          ROOT
+
+          cat > app/build.gradle <<'APP'
+          plugins { id 'com.android.application' }
+
+          android {
+              namespace 'com.msb.elevenminutes'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId "com.msb.elevenminutes"
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+
+              buildTypes {
+                  debug {
+                      applicationIdSuffix ".debug"
+                      versionNameSuffix "-debug"
+                  }
+                  release {
+                      minifyEnabled false
+                      proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+
+          dependencies {
+              // Kotlin 1.8+ folded jdk7/jdk8 into the main stdlib; some androidx
+              // artifacts still ask for the old split jars, duplicating every class.
+              constraints {
+                  implementation('org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22') { because 'duplicate classes' }
+                  implementation('org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22') { because 'duplicate classes' }
+              }
+              implementation 'androidx.appcompat:appcompat:1.7.0'
+              implementation 'androidx.activity:activity:1.9.2'
+              implementation 'androidx.core:core:1.13.1'
+          }
+          APP
+
+          echo "--- tree ---"
+          find . -path ./.git -prune -o -type f -print | sort
