@@ -1,3 +1,16 @@
-plugins {
-    id 'com.android.application' version '8.5.2' apply false
+dependencies {
+    // Kotlin 1.8+ folded jdk7/jdk8 into the main stdlib. Some androidx artifacts
+    // still request the old split jars, which duplicates every class in them.
+    constraints {
+        implementation('org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22') {
+            because 'avoid duplicate classes with kotlin-stdlib 1.8+'
+        }
+        implementation('org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22') {
+            because 'avoid duplicate classes with kotlin-stdlib 1.8+'
+        }
+    }
+
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'androidx.activity:activity:1.9.2'
+    implementation 'androidx.core:core:1.13.1'
 }
