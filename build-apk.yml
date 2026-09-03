@@ -1,36 +1,58 @@
-      - name: Rebuild the project tree from the flat upload
+name: Build APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rebuild the project tree
         run: |
           set -e
-          rm -f build.gradle "build (1).gradle" download
+          mv_if() { [ -f "$1" ] && mv "$1" "$2" || true; }
+          rm -f build.gradle "build (1).gradle" download build-apk.yml
 
           mkdir -p app/src/main/java/com/msb/elevenminutes \
                    app/src/main/res/values app/src/main/res/xml \
                    app/src/main/res/drawable app/src/main/res/mipmap-anydpi-v26 \
                    app/src/main/assets gradle/wrapper
 
-          mv AndroidManifest.xml            app/src/main/
-          mv Bridge.java MainActivity.java  app/src/main/java/com/msb/elevenminutes/
-          mv index.html                     app/src/main/assets/
-          mv strings.xml themes.xml colors.xml           app/src/main/res/values/
-          mv backup_rules.xml data_extraction_rules.xml  app/src/main/res/xml/
-          mv ic_launcher_foreground.xml     app/src/main/res/drawable/
-          mv ic_launcher.xml                app/src/main/res/mipmap-anydpi-v26/
-          mv gradle-wrapper.properties      gradle/wrapper/
-          mv proguard-rules.pro             app/
+          mv_if AndroidManifest.xml app/src/main/
+          mv_if Bridge.java         app/src/main/java/com/msb/elevenminutes/
+          mv_if MainActivity.java   app/src/main/java/com/msb/elevenminutes/
+          mv_if index.html          app/src/main/assets/
+          mv_if strings.xml         app/src/main/res/values/
+          mv_if themes.xml          app/src/main/res/values/
+          mv_if colors.xml          app/src/main/res/values/
+          mv_if backup_rules.xml    app/src/main/res/xml/
+          mv_if data_extraction_rules.xml app/src/main/res/xml/
+          mv_if ic_launcher_foreground.xml app/src/main/res/drawable/
+          mv_if ic_launcher.xml     app/src/main/res/mipmap-anydpi-v26/
+          mv_if gradle-wrapper.properties gradle/wrapper/
+          mv_if proguard-rules.pro  app/
 
-          cat > build.gradle <<'ROOT'
-          plugins {
-              id 'com.android.application' version '8.5.2' apply false
-          }
-          ROOT
+          cat > settings.gradle <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = "ElevenMinutes"
+          include ":app"
+          EOF
 
-          cat > app/build.gradle <<'APP'
+          cat > build.gradle <<'EOF'
+          plugins { id 'com.android.application' version '8.5.2' apply false }
+          EOF
+
+          cat > app/build.gradle <<'EOF'
           plugins { id 'com.android.application' }
-
           android {
               namespace 'com.msb.elevenminutes'
               compileSdk 34
-
               defaultConfig {
                   applicationId "com.msb.elevenminutes"
                   minSdk 24
@@ -38,36 +60,42 @@
                   versionCode 1
                   versionName "1.0"
               }
-
-              buildTypes {
-                  debug {
-                      applicationIdSuffix ".debug"
-                      versionNameSuffix "-debug"
-                  }
-                  release {
-                      minifyEnabled false
-                      proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-                  }
-              }
-
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
                   targetCompatibility JavaVersion.VERSION_17
               }
           }
-
           dependencies {
-              // Kotlin 1.8+ folded jdk7/jdk8 into the main stdlib; some androidx
-              // artifacts still ask for the old split jars, duplicating every class.
               constraints {
-                  implementation('org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22') { because 'duplicate classes' }
-                  implementation('org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22') { because 'duplicate classes' }
+                  implementation('org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22') { because 'dupes' }
+                  implementation('org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22') { because 'dupes' }
               }
               implementation 'androidx.appcompat:appcompat:1.7.0'
               implementation 'androidx.activity:activity:1.9.2'
               implementation 'androidx.core:core:1.13.1'
           }
-          APP
+          EOF
 
-          echo "--- tree ---"
           find . -path ./.git -prune -o -type f -print | sort
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - run: gradle wrapper --gradle-version 8.7 --no-daemon
+
+      - run: ./gradlew assembleDebug --no-daemon
+
+      - run: |
+          mkdir -p out
+          find app/build/outputs/apk -name '*.apk' -exec cp {} out/ \;
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eleven-minutes-apk
+          path: out/*.apk
