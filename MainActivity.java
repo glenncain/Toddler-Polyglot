@@ -10,11 +10,17 @@ import android.view.View;
 import android.view.WindowManager;
 import android.webkit.PermissionRequest;
 import android.webkit.ValueCallback;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Toast;
+
+import java.io.InputStream;
+import java.util.HashMap;
+import java.util.Map;
 
 import androidx.activity.OnBackPressedCallback;
 import androidx.activity.result.ActivityResultLauncher;
@@ -27,6 +33,24 @@ import androidx.core.content.ContextCompat;
 public class MainActivity extends AppCompatActivity {
 
     private static final int REQ_MIC = 41;
+
+    /* getUserMedia and MediaRecorder are blocked on file:// because Chromium treats it as
+       an insecure origin, no matter what Android has granted. So the assets are served
+       over https from a host that cannot resolve on the public internet. */
+    private static final String HOST = "appassets.androidplatform.net";
+    private static final String START = "https://" + HOST + "/assets/index.html";
+
+    private static final Map<String, String> MIME = new HashMap<>();
+    static {
+        MIME.put("html", "text/html");
+        MIME.put("js",   "application/javascript");
+        MIME.put("css",  "text/css");
+        MIME.put("json", "application/json");
+        MIME.put("svg",  "image/svg+xml");
+        MIME.put("png",  "image/png");
+        MIME.put("jpg",  "image/jpeg");
+        MIME.put("woff2","font/woff2");
+    }
 
     private WebView web;
     private Bridge bridge;
@@ -58,7 +82,25 @@ public class MainActivity extends AppCompatActivity {
         s.setTextZoom(100);                    // her layout must not follow system font scaling
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) s.setSafeBrowsingEnabled(false);
 
-        web.setWebViewClient(new WebViewClient());
+        web.setWebViewClient(new WebViewClient() {
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest req) {
+                android.net.Uri u = req.getUrl();
+                if (u == null || !HOST.equals(u.getHost())) return null;
+                String path = u.getPath();
+                if (path == null || !path.startsWith("/assets/")) return null;
+                try {
+                    String asset = path.substring("/assets/".length());
+                    InputStream in = getAssets().open(asset);
+                    int dot = asset.lastIndexOf('.');
+                    String mime = dot > -1 ? MIME.get(asset.substring(dot + 1).toLowerCase()) : null;
+                    return new WebResourceResponse(mime != null ? mime : "application/octet-stream",
+                                                   "utf-8", in);
+                } catch (Throwable t) {
+                    return null;
+                }
+            }
+        });
         web.setWebChromeClient(new WebChromeClient() {
             @Override
             public boolean onShowFileChooser(WebView v, ValueCallback<Uri[]> cb,
@@ -94,7 +136,7 @@ public class MainActivity extends AppCompatActivity {
         bridge = new Bridge(this, web);
         web.addJavascriptInterface(bridge, "AndroidBridge");
         web.setBackgroundColor(0xFF171526);
-        web.loadUrl("file:///android_asset/index.html");
+        web.loadUrl(START);
 
         askMic();
         immersive();
