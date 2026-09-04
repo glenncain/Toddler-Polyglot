@@ -74,7 +74,18 @@ jobs:
               implementation 'androidx.core:core:1.13.1'
           }
           EOF
-
+          python3 - <<'PY'
+          p = "app/src/main/assets/index.html"
+          s = open(p).read()
+          s = s.replace(
+            'catch(e){ DIAG.mic="denied"; paintDiag(); }',
+            'catch(e){ DIAG.mic="denied"; DIAG.micErr=(e&&e.name?e.name:"?")+" / "+location.protocol; paintDiag(); }')
+          s = s.replace(
+            '"Grant the microphone in system settings, then run this again." :',
+            '("Blocked ["+(DIAG.micErr||"?")+"]. Grant the microphone in system settings, then run this again.") :')
+          open(p, "w").write(s)
+          print("diagnostic patched in")
+          PY
           find . -path ./.git -prune -o -type f -print | sort
 
       - uses: actions/setup-java@v4
