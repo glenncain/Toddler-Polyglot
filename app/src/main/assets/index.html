@@ -262,7 +262,7 @@ let ttsSeq = 0; const ttsWaiting = {};
 window.__ttsDone = (id, ok)=>{ const f=ttsWaiting[id]; if(f){ delete ttsWaiting[id]; f(!!ok); } };
 window.__ttsReady = ()=>{ if(NB){ try{ NCAP=JSON.parse(NB.capabilities()); }catch(e){} } };
 window.__micGranted = ()=>{};
-let asrHit = null, asrErr = null;
+let asrHit = null, asrErr = null, asrOpen = null;
 window.__asrHeard = txt=>{ if(asrHit) asrHit(txt); };
 /* A failing recogniser used to look exactly like a quiet room. It now reports the
    failure by name, and whether that attempt was the offline-first one or the network
@@ -272,6 +272,10 @@ window.__asrError = (name, wasOffline)=>{
   try{ DIAG.asrLast = info.name + (info.offline ? " (offline)" : " (online)"); }catch(e){}
   if(asrErr) asrErr(info);
 };
+/* Fires when the recogniser actually has the microphone. "It opened and heard
+   nothing" and "it never opened at all" look identical from the page otherwise,
+   and they are different faults. */
+window.__asrReady = ()=>{ if(asrOpen) asrOpen(); };
 const nativeSpeak = (text,langTag)=>new Promise(res=>{
   const id = ++ttsSeq;
   ttsWaiting[id]=res;
@@ -466,7 +470,7 @@ function listen(e,hit){
   }catch(_){return false}
 }
 const unlisten=()=>{
-  if(NB){ asrHit=null; asrErr=null; try{ NB.stopListening(); }catch(e){} return; }
+  if(NB){ asrHit=null; asrErr=null; asrOpen=null; try{ NB.stopListening(); }catch(e){} return; }
   try{if(rec)rec.stop()}catch(e){}
 };
 
@@ -733,7 +737,7 @@ function stopRec(){ try{ if(mediaRec&&mediaRec.state==="recording") mediaRec.sto
    per-language tests need you in the room, because only you can say whether a
    voice really came out of the speaker. */
 const DIAG={ran:false,mic:null,micErr:"",peak:0,asr:null,asrLast:"",store:null,rec:null,native:null,langs:{}};
-LK.forEach(l=>DIAG.langs[l]={voice:null,spoke:null,asr:null,text:"",err:""});
+LK.forEach(l=>DIAG.langs[l]={voice:null,spoke:null,asr:null,text:"",err:"",opened:false});
 const TESTWORD=l=>ALL.find(a=>a.obj==="shoe"&&a.lang===l);
 
 /* like listen(), but hands back whatever it thought it heard rather than a verdict */
@@ -815,7 +819,8 @@ async function diagSpeak(l){
 function diagListen(l){
   const d=DIAG.langs[l], e=TESTWORD(l);
   unlisten();
-  d.asr="listening"; d.text=""; d.err=""; paintDiag();
+  d.asr="listening"; d.text=""; d.err=""; d.opened=false; paintDiag();
+  asrOpen = ()=>{ d.opened=true; };
   /* The bridge tries offline first and retries over the network, so an offline
      failure is not the end of the attempt — only a failed retry is. */
   asrErr = info=>{
@@ -833,7 +838,7 @@ function diagListen(l){
   if(!started){ d.asr="unavailable"; paintDiag(); return; }
   setTimeout(()=>{
     unlisten();
-    if(d.asr==="listening"){ d.asr = d.err ? "failed" : "silent"; paintDiag(); }
+    if(d.asr==="listening"){ d.asr = d.err ? "failed" : (d.opened ? "silent" : "never-opened"); paintDiag(); }
   },9000);
 }
 
@@ -844,6 +849,7 @@ function verdict(l){
   if(!d.voice && recorded(l))  return ["good","your voice"];
   if(d.spoke==="silent")       return ["bad","no sound came out"];
   if(d.asr==="failed")         return ["bad", d.err||"recogniser failed"];
+  if(d.asr==="never-opened")   return ["bad","never got the mic"];
   if(d.asr==="matched")        return ["good","ready"];
   if(d.asr==="heard")          return ["warn","hears, did not match"];
   if(d.asr==="silent"||d.asr==="unavailable") return ["warn","you tap ✓"];
@@ -914,6 +920,7 @@ function paintDiag(){
     else if(d.asr==="listening") sub="Now say “"+TESTWORD(l).say+"” out loud.";
     else if(d.text) sub="It heard: “"+d.text+"”";
     else if(d.err) sub="The recogniser refused: "+d.err;
+    else if(d.asr==="never-opened") sub="The recogniser never took the microphone. Something else is holding it.";
     else if(!d.voice) sub="No installed voice for this language.";
     else sub="Voice installed. 🔊 speaks the test word, 🎤 listens for you.";
     t.innerHTML="<strong>"+LANGS[l].flag+" "+LANGS[l].name+"</strong><small>"+sub+"</small>";
@@ -955,7 +962,7 @@ function diagReport(){
     const d=DIAG.langs[l];
     L.push(LANGS[l].name+": voice="+(d.voice?"installed":"missing")
       +" spoke="+(d.spoke||"-")+" asr="+(d.asr||"-")
-      +(d.err?" err="+d.err:"")
+      +(d.err?" err="+d.err:"")+" opened="+(d.opened?"yes":"no")
       +(d.text?" heard=\""+d.text+"\"":"")
       +" recordings="+(recorded(l)?"yes":"no")
       +" → "+verdict(l)[1]);

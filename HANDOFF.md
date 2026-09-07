@@ -107,7 +107,9 @@ English row and say "shoe". The panel now reports:
 
 * the exact `getUserMedia` error name and the page origin,
 * the native probe result beside it,
-* the recogniser's failure by name, and whether it was the offline or online attempt.
+* the recogniser's failure by name, and whether it was the offline or online attempt,
+* and whether the recogniser ever actually took the microphone — "it opened and heard
+  nothing" and "it never opened" are different faults that used to look identical.
 
 **Save the report** (the panel's copy/save button) — it now contains every one of those.
 Do not trust a browser test — the whole bug is that Chrome and the WebView differ.
