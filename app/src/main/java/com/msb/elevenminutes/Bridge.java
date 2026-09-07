@@ -1,7 +1,12 @@
 package com.msb.elevenminutes;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.media.AudioFormat;
+import android.media.AudioRecord;
+import android.media.MediaRecorder;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -45,6 +50,14 @@ public class Bridge {
 
     private SpeechRecognizer asr;
     private boolean asrListening = false;
+    private String asrLang = null;
+    private boolean asrOffline = false;
+
+    /* Destroying a SpeechRecognizer does not hand the microphone back the instant the
+       call returns — the recognition service it was bound to lets go a moment later.
+       Anything else that wants the mic, getUserMedia above all, has to wait that out. */
+    private static final long SETTLE_MS = 350;
+    private long micFreeAt = 0L;
 
     public Bridge(Activity act, WebView web) {
         this.act = act;
@@ -145,6 +158,40 @@ public class Bridge {
 
     /* ───────────── listening ───────────── */
 
+    /* What the recogniser reports when it fails is the single most useful thing this
+       class knows, and it used to be dropped on the floor here. That is why a broken
+       microphone looked like silence from the page and stayed unexplained for so long.
+       Every failure now reaches the parent panel by name. */
+    private static String errName(int code) {
+        switch (code) {
+            case SpeechRecognizer.ERROR_NETWORK:                  return "network";
+            case SpeechRecognizer.ERROR_NETWORK_TIMEOUT:          return "network-timeout";
+            case SpeechRecognizer.ERROR_AUDIO:                    return "audio";
+            case SpeechRecognizer.ERROR_SERVER:                   return "server";
+            case SpeechRecognizer.ERROR_CLIENT:                   return "client";
+            case SpeechRecognizer.ERROR_SPEECH_TIMEOUT:           return "no-speech";
+            case SpeechRecognizer.ERROR_NO_MATCH:                 return "no-match";
+            case SpeechRecognizer.ERROR_RECOGNIZER_BUSY:          return "busy";
+            case SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS: return "no-permission";
+            // named constants for these arrived after minSdk; the values are stable
+            case 10: return "too-many-requests";
+            case 11: return "server-disconnected";
+            case 12: return "language-not-supported";
+            case 13: return "language-unavailable";
+            case 14: return "cannot-check-support";
+            default: return "error-" + code;
+        }
+    }
+
+    /** Failures that mean on-device recognition is not going to happen on this tablet. */
+    private static boolean worthRetryingOnline(int code) {
+        return code == SpeechRecognizer.ERROR_NO_MATCH
+            || code == SpeechRecognizer.ERROR_SERVER
+            || code == SpeechRecognizer.ERROR_NETWORK
+            || code == SpeechRecognizer.ERROR_NETWORK_TIMEOUT
+            || code == 12 || code == 13 || code == 14;
+    }
+
     @JavascriptInterface
     public boolean asrAvailable() {
         try { return SpeechRecognizer.isRecognitionAvailable(act); }
@@ -153,57 +200,143 @@ public class Bridge {
 
     @JavascriptInterface
     public void startListening(final String langTag) {
-        ui.post(() -> {
-            stopAsrInternal();
-            if (!asrAvailable()) return;
-            try {
-                asr = SpeechRecognizer.createSpeechRecognizer(act);
-                asr.setRecognitionListener(new RecognitionListener() {
-                    @Override public void onReadyForSpeech(Bundle b) {}
-                    @Override public void onBeginningOfSpeech() {}
-                    @Override public void onRmsChanged(float v) {}
-                    @Override public void onBufferReceived(byte[] b) {}
-                    @Override public void onEndOfSpeech() {}
-                    @Override public void onError(int e) { asrListening = false; }
-                    @Override public void onEvent(int a, Bundle b) {}
+        ui.post(() -> { releaseAsr(); begin(langTag, true); });
+    }
 
-                    @Override public void onPartialResults(Bundle b) { push(b); }
-                    @Override public void onResults(Bundle b) { push(b); asrListening = false; }
-
-                    private void push(Bundle b) {
-                        ArrayList<String> got = b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-                        if (got == null || got.isEmpty()) return;
-                        StringBuilder all = new StringBuilder();
-                        for (String s : got) all.append(' ').append(s);
-                        toJs("window.__asrHeard && window.__asrHeard(" + q(all.toString()) + ")");
-                    }
-                });
-
-                Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-                i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-                i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, langTag);
-                i.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-                i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5);
-                i.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, act.getPackageName());
-                // she is two rooms from a router at bedtime; keep it on-device where possible
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    i.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true);
+    /* EXTRA_PREFER_OFFLINE used to be set unconditionally, to keep her bedtime session
+       off the network. On a tablet with no downloaded speech pack for a language that
+       does not degrade to the online recogniser — it fails outright. So: ask for
+       offline first, and if the answer is one of the "no on-device model" failures,
+       come back once over the network rather than reporting silence. */
+    private void begin(final String langTag, final boolean preferOffline) {
+        if (!asrAvailable()) {
+            toJs("window.__asrError && window.__asrError(\"unavailable\"," + preferOffline + ")");
+            return;
+        }
+        asrLang = langTag;
+        asrOffline = preferOffline;
+        try {
+            asr = SpeechRecognizer.createSpeechRecognizer(act);
+            asr.setRecognitionListener(new RecognitionListener() {
+                @Override public void onReadyForSpeech(Bundle b) {
+                    toJs("window.__asrReady && window.__asrReady(" + preferOffline + ")");
                 }
-                asr.startListening(i);
-                asrListening = true;
-            } catch (Throwable ignored) { asrListening = false; }
-        });
+                @Override public void onBeginningOfSpeech() {}
+                @Override public void onRmsChanged(float v) {}
+                @Override public void onBufferReceived(byte[] b) {}
+                @Override public void onEndOfSpeech() {}
+                @Override public void onEvent(int a, Bundle b) {}
+
+                @Override public void onError(int e) {
+                    asrListening = false;
+                    final boolean wasOffline = asrOffline;
+                    final String lang = asrLang;
+                    // let the recogniser finish this callback before it is torn down
+                    ui.post(() -> {
+                        releaseAsr();
+                        toJs("window.__asrError && window.__asrError(" + q(errName(e)) + ","
+                             + wasOffline + ")");
+                        if (wasOffline && worthRetryingOnline(e) && lang != null) {
+                            ui.postDelayed(() -> begin(lang, false), SETTLE_MS);
+                        }
+                    });
+                }
+
+                @Override public void onPartialResults(Bundle b) { push(b); }
+                @Override public void onResults(Bundle b) { push(b); asrListening = false; }
+
+                private void push(Bundle b) {
+                    ArrayList<String> got = b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                    if (got == null || got.isEmpty()) return;
+                    StringBuilder all = new StringBuilder();
+                    for (String s : got) all.append(' ').append(s);
+                    toJs("window.__asrHeard && window.__asrHeard(" + q(all.toString()) + ")");
+                }
+            });
+
+            Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, langTag);
+            i.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+            i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5);
+            i.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, act.getPackageName());
+            if (preferOffline && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                i.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true);
+            }
+            asr.startListening(i);
+            asrListening = true;
+        } catch (Throwable t) {
+            asrListening = false;
+            releaseAsr();
+            toJs("window.__asrError && window.__asrError(" + q("start-threw-" + t.getClass().getSimpleName())
+                 + "," + preferOffline + ")");
+        }
     }
 
     @JavascriptInterface
-    public void stopListening() { ui.post(this::stopAsrInternal); }
+    public void stopListening() { ui.post(this::releaseAsr); }
 
-    private void stopAsrInternal() {
-        try {
-            if (asr != null) { asr.cancel(); asr.destroy(); }
-        } catch (Throwable ignored) {}
+    /* The old version left the recogniser alive after an error, so a failed listen kept
+       the microphone bound for the rest of the session and everything that asked for it
+       afterwards was refused. */
+    private void releaseAsr() {
+        boolean had = (asr != null);
+        try { if (asr != null) { asr.cancel(); asr.destroy(); } } catch (Throwable ignored) {}
         asr = null;
         asrListening = false;
+        asrLang = null;
+        asrOffline = false;
+        if (had) micFreeAt = System.currentTimeMillis() + SETTLE_MS;
+    }
+
+    /** Milliseconds the page should wait before asking for the microphone itself. */
+    @JavascriptInterface
+    public long micBusyFor() {
+        long left = micFreeAt - System.currentTimeMillis();
+        return left > 0 ? left : 0;
+    }
+
+    /* Opens the microphone natively for a moment and says what happened. The page
+       cannot tell "this WebView will not capture audio" from "nothing on this device
+       can open the microphone right now", and those two want opposite fixes. This can. */
+    @JavascriptInterface
+    public String micProbe() {
+        AudioRecord r = null;
+        try {
+            if (act.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                    != PackageManager.PERMISSION_GRANTED) {
+                return "{\"ok\":false,\"why\":\"no-permission\"}";
+            }
+            int rate = 16000;
+            int min = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO,
+                                                   AudioFormat.ENCODING_PCM_16BIT);
+            if (min <= 0) return "{\"ok\":false,\"why\":\"no-buffer\"}";
+            r = new AudioRecord(MediaRecorder.AudioSource.MIC, rate, AudioFormat.CHANNEL_IN_MONO,
+                                AudioFormat.ENCODING_PCM_16BIT, min * 2);
+            if (r.getState() != AudioRecord.STATE_INITIALIZED) {
+                return "{\"ok\":false,\"why\":\"uninitialised\"}";
+            }
+            r.startRecording();
+            if (r.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) {
+                return "{\"ok\":false,\"why\":\"refused\"}";
+            }
+            short[] buf = new short[min];
+            long frames = 0; int peak = 0;
+            long until = System.currentTimeMillis() + 400;
+            while (System.currentTimeMillis() < until) {
+                int n = r.read(buf, 0, buf.length);
+                if (n < 0) return "{\"ok\":false,\"why\":\"read" + n + "\"}";
+                for (int k = 0; k < n; k++) { int v = Math.abs(buf[k]); if (v > peak) peak = v; }
+                frames += n;
+            }
+            return "{\"ok\":true,\"frames\":" + frames
+                 + ",\"peak\":" + String.format(Locale.US, "%.3f", peak / 32767.0) + "}";
+        } catch (Throwable t) {
+            return "{\"ok\":false,\"why\":" + q(t.getClass().getSimpleName()) + "}";
+        } finally {
+            try { if (r != null) { r.stop(); r.release(); } } catch (Throwable ignored) {}
+            micFreeAt = System.currentTimeMillis() + SETTLE_MS;
+        }
     }
 
     /* ───────────── remembering ───────────── */
@@ -314,7 +447,7 @@ public class Bridge {
     }
 
     public void release() {
-        stopAsrInternal();
+        releaseAsr();
         try { if (tts != null) { tts.stop(); tts.shutdown(); } } catch (Throwable ignored) {}
         tts = null;
     }

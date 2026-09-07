@@ -46,36 +46,75 @@ Confirmed working in the APK: TTS in all four languages, the native key-value st
 
 ### Already ruled out
 
-* **`file://` insecure origin.** Was a real bug, already fixed. `MainActivity` now serves
-  assets over `https://appassets.androidplatform.net/assets/` via
-  `shouldInterceptRequest`. The diagnostic confirms the page origin is `https:`.
+* **`file://` insecure origin.** Was a real bug, already fixed. `MainActivity` serves
+  assets over `https://appassets.androidplatform.net/assets/` via `shouldInterceptRequest`.
 * **System permission.** `RECORD_AUDIO` is granted, "Allow only while using the app".
 * **Global mic kill switch.** Checked, on.
 * **Hardware.** Chrome on the same tablet recognised all four languages the same day.
 
-### Current hypothesis, not yet tested on device
+### What the previous round got wrong
 
-`INTERNET` was deliberately left out of the manifest to honour "run it offline". Android's
-`SpeechRecognizer` needs a connection unless per-language offline speech data has been
-downloaded, which this tablet probably lacks. It would start, reach nothing and return
-silence — exactly what is observed. **The permission has been restored in this handoff but
-never verified on the device.** Confirm or kill this hypothesis first.
+Three things, found by reading the code rather than the tablet:
 
-That hypothesis does not explain `NotReadableError` from `getUserMedia`, which needs no
-network. Two candidates there, in order of likelihood:
+1. **`Bridge.onError()` threw every recogniser failure away.** It set a flag and returned.
+   The page had no way to learn that recognition had failed, let alone why — so every
+   failure, of any cause, surfaced as "silent, no result". That symptom was never
+   evidence of silence; it was the absence of a report. Fixed: failures now reach the
+   page by name (`no-match`, `network`, `no-permission`, `language-unavailable`, …).
 
-1. `SpeechRecognizer` and `getUserMedia` contending for the mic. `Bridge.stopAsrInternal()`
-   calls `cancel()` then `destroy()`, which may not release the input device before the
-   WebView asks for it. Try a delay, or route recording through a native `MediaRecorder`
-   instead.
-2. Some WebView builds refuse mic capture regardless of `onPermissionRequest`. If so, move
-   recording to the native side entirely — the bridge already owns audio.
+2. **`EXTRA_PREFER_OFFLINE` was set unconditionally**, so restoring `INTERNET` could not
+   have fixed anything on its own. Asking for offline recognition on a device with no
+   downloaded language pack does not fall back to the network — it fails. The old
+   hypothesis ("no `INTERNET`, so the recogniser reaches nothing") was therefore
+   incomplete: the permission was one of two locks on the same door. Fixed: offline is
+   attempted first, and a failure that means "no on-device model here" retries once over
+   the network. Both attempts are reported separately.
 
-### How to reproduce in 30 seconds
+3. **A failed listen left the recogniser alive.** `onError` never released it, so after
+   the first failure a live `SpeechRecognizer` held the microphone for the rest of the
+   session — and anything that asked for the mic afterwards, `getUserMedia` included,
+   got refused. This is a genuine, sufficient cause of `NotReadableError`, though see
+   the caveat below. Fixed: the recogniser is released on every error, and the page waits
+   out the handover (`micBusyFor()`) before taking the mic itself.
+
+**Caveat, stated plainly: none of this is verified on the device.** It was all found by
+reading the source. The fixes are correct in the sense that each repairs a real defect,
+but whether they repair *your* symptom is unknown until the APK runs on the tablet.
+
+The caveat matters most for `NotReadableError`. In the reproduction below, `Run the check`
+opens `getUserMedia` *before* anything has started the recogniser, so on a freshly launched
+app the leaked-recogniser chain cannot be the cause of that first failure. Something else
+is refusing the WebView's first mic open, and the code does not say what.
+
+### The thing that will answer it
+
+The parent panel now runs `Bridge.micProbe()` — a native `AudioRecord` opened for 400ms —
+immediately before the WebView tries. That single comparison splits the remaining
+possibilities, which nothing measured so far could:
+
+| Native probe | WebView | Means |
+|---|---|---|
+| opens | refused | the WebView is refusing, not the tablet — move recording to the native side |
+| refused | refused | nothing in this app can open the mic; the probe's reason names why |
+| opens | opens | it is fixed; the leaked recogniser was the cause |
+
+Run that before writing any more code.
+
+## How to reproduce in 30 seconds
 
 Install, hold the top-left corner for 1.6s, tap **Run the check**, then tap 🎤 on the
-English row and say "shoe". The panel reports the raw transcript and the exact error name.
+English row and say "shoe". The panel now reports:
+
+* the exact `getUserMedia` error name and the page origin,
+* the native probe result beside it,
+* the recogniser's failure by name, and whether it was the offline or online attempt.
+
+**Save the report** (the panel's copy/save button) — it now contains every one of those.
 Do not trust a browser test — the whole bug is that Chrome and the WebView differ.
+
+If the report still does not explain it, `adb logcat | grep -i -E "speech|recogn|audio|webview"`
+during a failed 🎤 tap remains the fastest route, and was unavailable throughout the
+tablet-only debugging that produced the first version of this document.
 
 ## Building
 
@@ -89,17 +128,18 @@ Local (preferred now that there is a real machine):
 fastest route to the answer, and was unavailable throughout the tablet-only debugging
 that produced this document.
 
-## Repo warning
+## Repo layout
 
 The GitHub repo `glenncain/Toddler-Polyglot` was populated by a browser upload that
-**flattened every file into the root**, and the workflow there reconstructs the tree at
-build time. It also contains stray duplicates (`build (1).gradle`, a root-level
-`build-apk.yml` that does nothing, and an `index.html` predating the localStorage fix).
-Prefer pushing this folder over that repo wholesale rather than reconciling the two.
+flattened every file into the root, and two workflows reconstructed the tree at build
+time — one of them (`apk2.yml`) also rewrote `index.html` with a python heredoc before
+compiling, so the source that produced the APK was never the source in the repo. That is
+all gone. The repo now holds the tree exactly as laid out above and the workflow just
+builds it.
 
-Known build fix already applied: androidx pulls conflicting `kotlin-stdlib-jdk7/8`
-versions, which fails `checkDebugDuplicateClasses`. Constraints pinning both to 1.8.22
-are in `app/build.gradle`.
+The kotlin-stdlib constraints that stop `checkDebugDuplicateClasses` failing are now in
+`app/build.gradle`, where they apply. The earlier note claiming they were already there
+was wrong — they were in the root `build.gradle`, which has no dependencies to constrain.
 
 ## Do not regress
 
