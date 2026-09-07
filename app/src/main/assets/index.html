@@ -324,22 +324,28 @@ const byId=id=>ALL.find(a=>a.id===id);
 const BLANK={day:0,streak:0,lastDate:null,active:["en","es","zh","ja"],names:{a:"Dad",b:"Mum"},words:{},plan:null};
 let S=JSON.parse(JSON.stringify(BLANK));
 let VOICE={};                       // "cup:es:a" -> dataURL
-const mem={};                       // fallback when window.storage is absent
+const mem={};                       // last resort
+const hasLS=()=>{ try{ localStorage.setItem("em:t","1"); localStorage.removeItem("em:t"); return true; }catch(e){ return false; } };
 
 const store={
   async get(k){
     if(NB){ try{ const v=NB.prefGet(k); if(v!==null&&v!==undefined) return v; }catch(e){} return null; }
     try{ if(window.storage){const r=await window.storage.get(k); return r?r.value:null;} }catch(e){}
+    try{ const v=localStorage.getItem(k); if(v!==null) return v; }catch(e){}
     return k in mem?mem[k]:null;
   },
   async set(k,v){
     if(NB){ try{ NB.prefSet(k,v); return; }catch(e){} }
-    mem[k]=v; try{ if(window.storage) await window.storage.set(k,v); }catch(e){}
+    mem[k]=v;
+    try{ if(window.storage) await window.storage.set(k,v); }catch(e){}
+    try{ localStorage.setItem(k,v); }catch(e){}   // quota is ~5MB; recordings may not all fit
   },
   async keys(p){
     if(NB){ try{ return JSON.parse(NB.prefKeys(p)); }catch(e){ return []; } }
     try{ if(window.storage){const r=await window.storage.list(p); return r?r.keys:[];} }catch(e){}
-    return Object.keys(mem).filter(k=>k.startsWith(p));
+    const out=new Set(Object.keys(mem).filter(k=>k.startsWith(p)));
+    try{ for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i); if(k&&k.startsWith(p)) out.add(k);} }catch(e){}
+    return [...out];
   }
 };
 const saveState=()=>store.set("em:state",JSON.stringify(S));
@@ -723,7 +729,7 @@ async function diagRun(){
     const probe="em:diag", stamp="t"+Date.now();
     await store.set(probe,stamp);
     const back=await store.get(probe);
-    DIAG.store = back===stamp ? (NB?"device":(window.storage?"browser":"memory")) : "failed";
+    DIAG.store = back===stamp ? (NB?"device":(window.storage?"browser":(hasLS()?"browser":"memory"))) : "failed";
   }catch(e){ DIAG.store="failed"; }
   DIAG.asr = NB ? !!(NCAP&&NCAP.asr) : !!SR;
   DIAG.rec = !!(window.MediaRecorder && navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
@@ -967,7 +973,7 @@ $("dlg").addEventListener("close",()=>{
     S.plan=good; saveState(); toast(good.length+" cards loaded");
   }catch(e){ toast("that wasn't a card list"); }
 });
-$("reset").onclick=async()=>{ S=JSON.parse(JSON.stringify(BLANK)); if(NB){try{NB.prefClear()}catch(e){}} VOICE={}; await saveState(); paintParent(); toast("cleared"); };
+$("reset").onclick=async()=>{ S=JSON.parse(JSON.stringify(BLANK)); if(NB){try{NB.prefClear()}catch(e){}} try{ for(const k of Object.keys(localStorage)) if(k.startsWith("em:")) localStorage.removeItem(k); }catch(e){} VOICE={}; await saveState(); paintParent(); toast("cleared"); };
 
 /* ══ start ══ */
 (async function(){
