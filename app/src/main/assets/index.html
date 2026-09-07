@@ -269,7 +269,7 @@ window.__asrHeard = txt=>{ if(asrHit) asrHit(txt); };
    retry. Parent panel only — she never sees any of this. */
 window.__asrError = (name, wasOffline)=>{
   const info = { name:String(name||"?"), offline:!!wasOffline };
-  DIAG.asrLast = info.name + (info.offline ? " (offline)" : " (online)");
+  try{ DIAG.asrLast = info.name + (info.offline ? " (offline)" : " (online)"); }catch(e){}
   if(asrErr) asrErr(info);
 };
 const nativeSpeak = (text,langTag)=>new Promise(res=>{
@@ -693,6 +693,8 @@ function paintRec(){
 async function micStream(want){
   if(NB){
     try{ NB.stopListening(); }catch(e){}
+    // stopListening hops to the UI thread; the busy window is not published on return
+    await new Promise(r=>setTimeout(r,80));
     let wait=0; try{ wait=Number(NB.micBusyFor())||0; }catch(e){}
     if(wait>0) await new Promise(r=>setTimeout(r,wait+60));
   }

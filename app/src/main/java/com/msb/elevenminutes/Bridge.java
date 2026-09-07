@@ -200,7 +200,12 @@ public class Bridge {
 
     @JavascriptInterface
     public void startListening(final String langTag) {
-        ui.post(() -> { releaseAsr(); begin(langTag, true); });
+        ui.post(() -> {
+            releaseAsr();
+            long wait = micBusyFor();
+            if (wait > 0) ui.postDelayed(() -> begin(langTag, true), wait);
+            else begin(langTag, true);
+        });
     }
 
     /* EXTRA_PREFER_OFFLINE used to be set unconditionally, to keep her bedtime session
