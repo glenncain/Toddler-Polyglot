@@ -30,92 +30,74 @@ Hard constraints from the original brief, none of them negotiable:
 `window.AndroidBridge` at runtime and falls back to web APIs when absent. **Keep it that
 way** — do not fork it into an Android-only copy.
 
-## The open bug
-
-**On the installed APK, both microphone paths fail. In Chrome on the same tablet, both work.**
+## The bug, as far as it has been taken
 
 Device: Lenovo TB305FU, Android API 35.
 
-| Path | Used for | APK | Chrome |
-|---|---|---|---|
-| Android `SpeechRecognizer` (native) | her saying words back | silent, no result | n/a |
-| `getUserMedia` (WebView) | level meter, parent voice recording | `NotReadableError` | works |
+Two microphone paths failed on the installed APK while Chrome on the same tablet worked.
+The first is now understood and fixed. The second is narrowed to one open question.
 
-Confirmed working in the APK: TTS in all four languages, the native key-value store
-(`ON DEVICE`), `SpeechRecognizer.isRecognitionAvailable()` returns true.
+### What the device check answered
 
-### Already ruled out
+The panel now runs a native `AudioRecord` open immediately before the WebView tries the
+same thing. On the tablet, 2026-09-07:
 
-* **`file://` insecure origin.** Was a real bug, already fixed. `MainActivity` serves
-  assets over `https://appassets.androidplatform.net/assets/` via `shouldInterceptRequest`.
-* **System permission.** `RECORD_AUDIO` is granted, "Allow only while using the app".
-* **Global mic kill switch.** Checked, on.
-* **Hardware.** Chrome on the same tablet recognised all four languages the same day.
+    microphone: denied (peak 0%) error=NotReadableError origin=https:
+    native mic: opens (peak 1%)
+    recogniser: present  last error=no-match (online)
+    English: spoke=ok asr=failed err=no-match (online) opened=yes
 
-### What the previous round got wrong
+**The app can open the microphone. The WebView cannot.** Same process, same permission,
+same moment, opposite results. That is not a permission problem, not an origin problem
+and not a hardware problem — the three things the previous round spent its time on. It is
+this WebView build refusing `getUserMedia`, and nothing granted from the outside will
+change it.
 
-Three things, found by reading the code rather than the tablet:
+So capture moved to the native side, which is what the previous handoff already suspected
+would be needed:
 
-1. **`Bridge.onError()` threw every recogniser failure away.** It set a flag and returned.
-   The page had no way to learn that recognition had failed, let alone why — so every
-   failure, of any cause, surfaced as "silent, no result". That symptom was never
-   evidence of silence; it was the absence of a report. Fixed: failures now reach the
-   page by name (`no-match`, `network`, `no-permission`, `language-unavailable`, …).
+* `Bridge.levelStart()` / `levelStop()` — the level meter, read from `AudioRecord` and
+  pushed to the page as `__micLevel`.
+* `Bridge.recStart()` / `recStop()` — the parent's recordings, via `MediaRecorder`, handed
+  back as a `data:audio/mp4` URL so the page stores and plays them exactly as before.
+* `getUserMedia` is still the path in a plain browser. `nativeCap` picks between them.
 
-2. **`EXTRA_PREFER_OFFLINE` was set unconditionally**, so restoring `INTERNET` could not
-   have fixed anything on its own. Asking for offline recognition on a device with no
-   downloaded language pack does not fall back to the network — it fails. The old
-   hypothesis ("no `INTERNET`, so the recogniser reaches nothing") was therefore
-   incomplete: the permission was one of two locks on the same door. Fixed: offline is
-   attempted first, and a failure that means "no on-device model here" retries once over
-   the network. Both attempts are reported separately.
+### What is still open
 
-3. **A failed listen left the recogniser alive.** `onError` never released it, so after
-   the first failure a live `SpeechRecognizer` held the microphone for the rest of the
-   session — and anything that asked for the mic afterwards, `getUserMedia` included,
-   got refused. This is a genuine, sufficient cause of `NotReadableError`, though see
-   the caveat below. Fixed: the recogniser is released on every error, and the page waits
-   out the handover (`micBusyFor()`) before taking the mic itself.
+The recogniser now starts, takes the microphone (`opened=yes`) and comes back `no-match`.
+That is a different failure from the original silence, and a much smaller one: it is
+listening and not recognising, rather than never running.
 
-**Caveat, stated plainly: none of this is verified on the device.** It was all found by
-reading the source. The fixes are correct in the sense that each repairs a real defect,
-but whether they repair *your* symptom is unknown until the APK runs on the tablet.
+Two candidates, and **the native level meter now distinguishes them**, which nothing could
+before — the old meter ran on `getUserMedia`, which is exactly what does not work here:
 
-The caveat matters most for `NotReadableError`. In the reproduction below, `Run the check`
-opens `getUserMedia` *before* anything has started the recogniser, so on a freshly launched
-app the leaked-recogniser chain cannot be the cause of that first failure. Something else
-is refusing the WebView's first mic open, and the code does not say what.
+1. **The microphone opens but captures near-silence.** The native probe read a 1% peak,
+   but it samples 400ms at the start of the check when nobody is speaking yet, so that
+   number means nothing on its own. The meter running while you talk does mean something.
+2. **The utterance fell between two attempts.** The offline-first retry could start its
+   network attempt after you had already finished saying the word. This has been narrowed:
+   an offline attempt that *reached the microphone* and returned `no-match` is now taken at
+   its word rather than retried, and a language whose offline model is genuinely missing is
+   remembered so the split only ever happens once.
 
-### The thing that will answer it
+## What to do next
 
-The parent panel now runs `Bridge.micProbe()` — a native `AudioRecord` opened for 400ms —
-immediately before the WebView tries. That single comparison splits the remaining
-possibilities, which nothing measured so far could:
+Install, hold the top-left corner 1.6s, **Run the check**, and **talk while the meter is
+running**.
 
-| Native probe | WebView | Means |
-|---|---|---|
-| opens | refused | the WebView is refusing, not the tablet — move recording to the native side |
-| refused | refused | nothing in this app can open the mic; the probe's reason names why |
-| opens | opens | it is fixed; the leaked recogniser was the cause |
+* **The meter moves** → the microphone hears you. The `no-match` is a recognition problem:
+  look at `attempts=` in the saved report to see whether the offline and online attempts
+  both failed, and which one had the mic.
+* **The meter stays flat while you talk** → the microphone opens and captures silence.
+  That is an audio-routing fault, and every path in the app is downstream of it. Nothing
+  in this codebase can fix it; check whether another app holds the mic, or whether the
+  tablet has a mic mute or a case over it.
 
-Run that before writing any more code.
+The saved report carries all of it: `capture:` says which path is in use, `attempts=`
+lists every recogniser attempt with whether it got the microphone.
 
-## How to reproduce in 30 seconds
-
-Install, hold the top-left corner for 1.6s, tap **Run the check**, then tap 🎤 on the
-English row and say "shoe". The panel now reports:
-
-* the exact `getUserMedia` error name and the page origin,
-* the native probe result beside it,
-* the recogniser's failure by name, and whether it was the offline or online attempt,
-* and whether the recogniser ever actually took the microphone — "it opened and heard
-  nothing" and "it never opened" are different faults that used to look identical.
-
-**Save the report** (the panel's copy/save button) — it now contains every one of those.
-Do not trust a browser test — the whole bug is that Chrome and the WebView differ.
-
-If the report still does not explain it, `adb logcat | grep -i -E "speech|recogn|audio|webview"`
-during a failed 🎤 tap remains the fastest route, and was unavailable throughout the
+`adb logcat | grep -i -E "speech|recogn|audio|webview"` during a failed attempt remains
+the fastest route if the panel is not enough, and was unavailable throughout the
 tablet-only debugging that produced the first version of this document.
 
 ## Building

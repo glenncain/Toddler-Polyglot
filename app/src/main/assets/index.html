@@ -267,15 +267,32 @@ window.__asrHeard = txt=>{ if(asrHit) asrHit(txt); };
 /* A failing recogniser used to look exactly like a quiet room. It now reports the
    failure by name, and whether that attempt was the offline-first one or the network
    retry. Parent panel only — she never sees any of this. */
-window.__asrError = (name, wasOffline)=>{
-  const info = { name:String(name||"?"), offline:!!wasOffline };
-  try{ DIAG.asrLast = info.name + (info.offline ? " (offline)" : " (online)"); }catch(e){}
+window.__asrError = (name, wasOffline, hadMic, retrying)=>{
+  const info = { name:String(name||"?"), offline:!!wasOffline, mic:!!hadMic, retry:!!retrying };
+  try{
+    DIAG.asrLog.push((info.offline?"offline":"online")+":"+info.name+(info.mic?"":"/no-mic"));
+    if(DIAG.asrLog.length>6) DIAG.asrLog.shift();
+  }catch(e){}
   if(asrErr) asrErr(info);
 };
 /* Fires when the recogniser actually has the microphone. "It opened and heard
    nothing" and "it never opened at all" look identical from the page otherwise,
    and they are different faults. */
 window.__asrReady = ()=>{ if(asrOpen) asrOpen(); };
+
+/* This WebView refuses getUserMedia outright, so on Android the level meter and the
+   parent's recordings come from the bridge instead. Absent a bridge — the browser
+   build — every one of these stays unused and the web path below runs as before. */
+const nativeCap = !!(NB && NB.nativeCapture && NB.nativeCapture());
+let levelHit = null, nativeRecording = false;   // recKey is declared with the recorder below
+window.__micLevel = v=>{ if(levelHit) levelHit(Number(v)); };
+window.__recDone = async url=>{
+  if(!recKey) return;
+  VOICE[recKey] = url;
+  await store.set("em:v:"+recKey, url);
+  paintRec();
+};
+window.__recFail = why=>{ toast("recording failed — "+why); paintRec(); };
 const nativeSpeak = (text,langTag)=>new Promise(res=>{
   const id = ++ttsSeq;
   ttsWaiting[id]=res;
@@ -713,6 +730,14 @@ async function micStream(want){
 }
 
 async function startRec(key,btn){
+  if(nativeCap){
+    recKey=key;
+    if(!NB.recStart()) return;                 // the bridge reports why through __recFail
+    nativeRecording=true;
+    btn.classList.add("rec"); btn.textContent="■";
+    setTimeout(()=>{ if(nativeRecording) stopRec(); },4000);
+    return;
+  }
   try{
     const s=await micStream({audio:true});
     const mt=["audio/webm;codecs=opus","audio/mp4","audio/webm"].find(t=>window.MediaRecorder&&MediaRecorder.isTypeSupported(t));
@@ -730,13 +755,16 @@ async function startRec(key,btn){
     setTimeout(()=>{ if(mediaRec&&mediaRec.state==="recording") stopRec(); },4000);
   }catch(e){ toast("no microphone — "+((e&&e.name)||"?")); }
 }
-function stopRec(){ try{ if(mediaRec&&mediaRec.state==="recording") mediaRec.stop(); }catch(e){} mediaRec=null; }
+function stopRec(){
+  if(nativeRecording){ nativeRecording=false; try{ NB.recStop(); }catch(e){} return; }
+  try{ if(mediaRec&&mediaRec.state==="recording") mediaRec.stop(); }catch(e){} mediaRec=null;
+}
 
 /* ══ 9b. what this particular tablet can actually do ══
    Every claim on this panel is measured on the device, not assumed. The two
    per-language tests need you in the room, because only you can say whether a
    voice really came out of the speaker. */
-const DIAG={ran:false,mic:null,micErr:"",peak:0,asr:null,asrLast:"",store:null,rec:null,native:null,langs:{}};
+const DIAG={ran:false,mic:null,micErr:"",peak:0,asr:null,asrLog:[],store:null,rec:null,native:null,langs:{}};
 LK.forEach(l=>DIAG.langs[l]={voice:null,spoke:null,asr:null,text:"",err:"",opened:false});
 const TESTWORD=l=>ALL.find(a=>a.obj==="shoe"&&a.lang===l);
 
@@ -767,7 +795,7 @@ async function diagRun(){
     DIAG.store = back===stamp ? (NB?"device":(window.storage?"browser":(hasLS()?"browser":"memory"))) : "failed";
   }catch(e){ DIAG.store="failed"; }
   DIAG.asr = NB ? !!(NCAP&&NCAP.asr) : !!SR;
-  DIAG.rec = !!(window.MediaRecorder && navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+  DIAG.rec = nativeCap || !!(window.MediaRecorder && navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
   /* Ask the platform directly before the page tries. If the app can open the mic and
      the WebView cannot, that is a WebView problem and no amount of permission
      fiddling will help; if neither can, it is the device. Nothing else tells them apart. */
@@ -784,6 +812,7 @@ async function diagRun(){
 
 async function diagMic(){
   DIAG.mic="testing"; DIAG.peak=0; DIAG.micErr=""; paintDiag();
+  if(nativeCap) return diagMicNative();
   try{
     const stream=await micStream({audio:true});
     ac=ac||new (window.AudioContext||window.webkitAudioContext)();
@@ -808,6 +837,28 @@ async function diagMic(){
   }catch(e){ DIAG.mic="denied"; DIAG.micErr=(e&&e.name)||"?"; paintDiag(); }
 }
 
+/* Same four and a half seconds, same meter, read from the bridge. This is the test that
+   answers whether the microphone hears her at all, which getUserMedia cannot ask here. */
+function diagMicNative(){
+  return new Promise(done=>{
+    levelHit = v=>{
+      if(v<0){ DIAG.mic="denied"; DIAG.micErr="native-failed"; levelHit=null; paintDiag(); done(); return; }
+      if(v>DIAG.peak) DIAG.peak=v;
+      const bar=$("micbar"); if(bar) bar.style.width=Math.round(Math.min(1,v*2.4)*100)+"%";
+    };
+    let started=false;
+    try{ started=NB.levelStart(); }catch(e){}
+    if(!started){ DIAG.mic="denied"; DIAG.micErr="native-refused"; levelHit=null; paintDiag(); done(); return; }
+    setTimeout(()=>{
+      try{ NB.levelStop(); }catch(e){}
+      levelHit=null;
+      if(DIAG.mic==="testing") DIAG.mic = DIAG.peak>0.045 ? "ok" : "quiet";
+      const bar=$("micbar"); if(bar) bar.style.width="0%";
+      paintDiag(); done();
+    },4500);
+  });
+}
+
 async function diagSpeak(l){
   const d=DIAG.langs[l];
   d.spoke="speaking"; paintDiag();
@@ -824,8 +875,10 @@ function diagListen(l){
   /* The bridge tries offline first and retries over the network, so an offline
      failure is not the end of the attempt — only a failed retry is. */
   asrErr = info=>{
-    d.err = info.name + (info.offline ? " (offline)" : " (online)");
-    if(!info.offline && d.asr==="listening") d.asr="failed";
+    d.err = (d.err ? d.err+" → " : "")
+          + (info.offline?"offline":"online") + ":" + info.name + (info.mic?"":"/no-mic");
+    // the bridge says whether another attempt is coming; if none is, this is the answer
+    if(!info.retry && d.asr==="listening") d.asr="failed";
     paintDiag();
   };
   const started=listenRaw(e,txt=>{
@@ -954,7 +1007,9 @@ function diagReport(){
   L.push("microphone: "+(DIAG.mic||"not tested")+" (peak "+Math.round(DIAG.peak*100)+"%)"
     +(DIAG.micErr?" error="+DIAG.micErr:"")+" origin="+location.protocol);
   L.push("native mic: "+(DIAG.native ? (DIAG.native.ok?"opens (peak "+Math.round((DIAG.native.peak||0)*100)+"%)":"refused ("+(DIAG.native.why||"?")+")") : "not probed"));
-  L.push("recogniser: "+(DIAG.asr?"present":"missing")+(DIAG.asrLast?" last error="+DIAG.asrLast:""));
+  L.push("recogniser: "+(DIAG.asr?"present":"missing")
+    +(DIAG.asrLog.length?" attempts="+DIAG.asrLog.join(" → "):""));
+  L.push("capture:    "+(nativeCap?"native (this WebView refuses getUserMedia)":"web getUserMedia"));
   L.push("recording:  "+(DIAG.rec?"available":"missing"));
   L.push("storage:    "+(DIAG.store||"not tested"));
   L.push("");

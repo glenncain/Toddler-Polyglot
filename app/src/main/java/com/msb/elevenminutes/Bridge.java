@@ -52,6 +52,13 @@ public class Bridge {
     private boolean asrListening = false;
     private String asrLang = null;
     private boolean asrOffline = false;
+    private boolean asrOpened = false;               // did this attempt reach the microphone
+    private final Map<String, Boolean> offlineOk = new HashMap<>();
+
+    private Thread levelThread;
+    private volatile boolean levelRun = false;
+    private android.media.MediaRecorder rec;
+    private File recFile;
 
     /* Destroying a SpeechRecognizer does not hand the microphone back the instant the
        call returns — the recognition service it was bound to lets go a moment later.
@@ -183,10 +190,9 @@ public class Bridge {
         }
     }
 
-    /** Failures that mean on-device recognition is not going to happen on this tablet. */
-    private static boolean worthRetryingOnline(int code) {
-        return code == SpeechRecognizer.ERROR_NO_MATCH
-            || code == SpeechRecognizer.ERROR_SERVER
+    /** Failures that mean there is no on-device model, as opposed to nothing being said. */
+    private static boolean noOfflineModel(int code) {
+        return code == SpeechRecognizer.ERROR_SERVER
             || code == SpeechRecognizer.ERROR_NETWORK
             || code == SpeechRecognizer.ERROR_NETWORK_TIMEOUT
             || code == 12 || code == 13 || code == 14;
@@ -202,9 +208,12 @@ public class Bridge {
     public void startListening(final String langTag) {
         ui.post(() -> {
             releaseAsr();
+            // once a language is known to have no on-device model, stop splitting her
+            // speaking window between a doomed offline attempt and the retry
+            final boolean tryOffline = !Boolean.FALSE.equals(offlineOk.get(langTag));
             long wait = micBusyFor();
-            if (wait > 0) ui.postDelayed(() -> begin(langTag, true), wait);
-            else begin(langTag, true);
+            if (wait > 0) ui.postDelayed(() -> begin(langTag, tryOffline), wait);
+            else begin(langTag, tryOffline);
         });
     }
 
@@ -220,10 +229,12 @@ public class Bridge {
         }
         asrLang = langTag;
         asrOffline = preferOffline;
+        asrOpened = false;
         try {
             asr = SpeechRecognizer.createSpeechRecognizer(act);
             asr.setRecognitionListener(new RecognitionListener() {
                 @Override public void onReadyForSpeech(Bundle b) {
+                    asrOpened = true;
                     toJs("window.__asrReady && window.__asrReady(" + preferOffline + ")");
                 }
                 @Override public void onBeginningOfSpeech() {}
@@ -235,13 +246,24 @@ public class Bridge {
                 @Override public void onError(int e) {
                     asrListening = false;
                     final boolean wasOffline = asrOffline;
+                    final boolean hadMic = asrOpened;
                     final String lang = asrLang;
                     // let the recogniser finish this callback before it is torn down
                     ui.post(() -> {
                         releaseAsr();
+                        /* Retrying over the network only makes sense when the offline
+                           attempt never got off the ground. An offline attempt that took
+                           the microphone and came back with no-match genuinely heard
+                           nothing it recognised — running it again online just costs her
+                           another four seconds of standing there. */
+                        boolean noModel = !hadMic || noOfflineModel(e);
+                        boolean retrying = wasOffline && noModel && lang != null;
+                        // tell the page, so the panel does not sit on "listening" waiting
+                        // for an attempt that is never coming
                         toJs("window.__asrError && window.__asrError(" + q(errName(e)) + ","
-                             + wasOffline + ")");
-                        if (wasOffline && worthRetryingOnline(e) && lang != null) {
+                             + wasOffline + "," + hadMic + "," + retrying + ")");
+                        if (retrying) {
+                            offlineOk.put(lang, false);
                             ui.postDelayed(() -> begin(lang, false), SETTLE_MS);
                         }
                     });
@@ -342,6 +364,157 @@ public class Bridge {
             try { if (r != null) { r.stop(); r.release(); } } catch (Throwable ignored) {}
             micFreeAt = System.currentTimeMillis() + SETTLE_MS;
         }
+    }
+
+    /* ───────────── capturing audio, natively ─────────────
+       This WebView refuses getUserMedia with NotReadableError while the app itself opens
+       the microphone without complaint — micProbe() established that on the target
+       tablet, and it is not a permission or origin problem, so no amount of granting
+       fixes it. The level meter and the parent's recordings are therefore taken here and
+       handed to the page as data. The web path stays in index.html for the browser build. */
+
+    /** True when the page should use the two capture methods below instead of getUserMedia. */
+    @JavascriptInterface
+    public boolean nativeCapture() { return true; }
+
+    @JavascriptInterface
+    public boolean levelStart() {
+        if (levelRun) return true;
+        try {
+            if (act.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                    != PackageManager.PERMISSION_GRANTED) return false;
+        } catch (Throwable t) { return false; }
+
+        final long wait = micBusyFor();
+        levelRun = true;
+        levelThread = new Thread(() -> {
+            AudioRecord r = null;
+            try {
+                if (wait > 0) Thread.sleep(wait);
+                int rate = 16000;
+                int min = AudioRecord.getMinBufferSize(rate, AudioFormat.CHANNEL_IN_MONO,
+                                                       AudioFormat.ENCODING_PCM_16BIT);
+                if (min <= 0) { toJs("window.__micLevel && window.__micLevel(-1)"); return; }
+                r = new AudioRecord(MediaRecorder.AudioSource.MIC, rate, AudioFormat.CHANNEL_IN_MONO,
+                                    AudioFormat.ENCODING_PCM_16BIT, min * 2);
+                if (r.getState() != AudioRecord.STATE_INITIALIZED) {
+                    toJs("window.__micLevel && window.__micLevel(-1)"); return;
+                }
+                r.startRecording();
+                if (r.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) {
+                    toJs("window.__micLevel && window.__micLevel(-1)"); return;
+                }
+                short[] buf = new short[min];      // ~80ms a read at this rate, so ~12 a second
+                while (levelRun) {
+                    int got = r.read(buf, 0, buf.length);
+                    if (got <= 0) continue;
+                    int peak = 0;
+                    for (int k = 0; k < got; k++) { int v = Math.abs(buf[k]); if (v > peak) peak = v; }
+                    toJs("window.__micLevel && window.__micLevel("
+                         + String.format(Locale.US, "%.4f", peak / 32767.0) + ")");
+                }
+            } catch (Throwable t) {
+                toJs("window.__micLevel && window.__micLevel(-1)");
+            } finally {
+                try { if (r != null) { r.stop(); r.release(); } } catch (Throwable ignored) {}
+                micFreeAt = System.currentTimeMillis() + SETTLE_MS;
+                levelRun = false;
+            }
+        }, "mic-level");
+        levelThread.start();
+        return true;
+    }
+
+    @JavascriptInterface
+    public void levelStop() {
+        levelRun = false;
+        Thread t = levelThread;
+        levelThread = null;
+        if (t != null) { try { t.join(600); } catch (Throwable ignored) {} }
+        micFreeAt = System.currentTimeMillis() + SETTLE_MS;
+    }
+
+    @JavascriptInterface
+    public synchronized boolean recStart() {
+        recDiscard();
+        try {
+            if (act.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                    != PackageManager.PERMISSION_GRANTED) {
+                toJs("window.__recFail && window.__recFail(\"no-permission\")");
+                return false;
+            }
+            long wait = micBusyFor();
+            if (wait > 0) Thread.sleep(wait);
+
+            recFile = new File(act.getCacheDir(), "rec-" + System.currentTimeMillis() + ".m4a");
+            android.media.MediaRecorder m = (Build.VERSION.SDK_INT >= 31)
+                ? new android.media.MediaRecorder(act)
+                : new android.media.MediaRecorder();
+            m.setAudioSource(MediaRecorder.AudioSource.MIC);
+            m.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
+            m.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
+            m.setAudioChannels(1);
+            m.setAudioSamplingRate(16000);
+            m.setAudioEncodingBitRate(32000);
+            m.setOutputFile(recFile.getAbsolutePath());
+            m.prepare();
+            m.start();
+            rec = m;
+            return true;
+        } catch (Throwable t) {
+            recDiscard();
+            toJs("window.__recFail && window.__recFail(" + q(t.getClass().getSimpleName()) + ")");
+            return false;
+        }
+    }
+
+    /** Stops, and hands the clip back as a data URL so the page stores it exactly as before. */
+    @JavascriptInterface
+    public synchronized void recStop() {
+        android.media.MediaRecorder m = rec;
+        rec = null;
+        boolean stopped = false;
+        if (m != null) {
+            try { m.stop(); stopped = true; } catch (Throwable ignored) {}
+            try { m.reset(); m.release(); } catch (Throwable ignored) {}
+        }
+        micFreeAt = System.currentTimeMillis() + SETTLE_MS;
+
+        File f = recFile;
+        recFile = null;
+        if (!stopped || f == null || !f.exists() || f.length() == 0) {
+            if (f != null) f.delete();
+            toJs("window.__recFail && window.__recFail(\"empty\")");
+            return;
+        }
+        try {
+            byte[] buf = new byte[(int) f.length()];
+            try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
+                int read = 0;
+                while (read < buf.length) {
+                    int k = in.read(buf, read, buf.length - read);
+                    if (k < 0) break;
+                    read += k;
+                }
+            }
+            toJs("window.__recDone && window.__recDone("
+                 + q("data:audio/mp4;base64," + Base64.encodeToString(buf, Base64.NO_WRAP)) + ")");
+        } catch (Throwable t) {
+            toJs("window.__recFail && window.__recFail(" + q(t.getClass().getSimpleName()) + ")");
+        } finally {
+            f.delete();
+        }
+    }
+
+    private void recDiscard() {
+        android.media.MediaRecorder m = rec;
+        rec = null;
+        if (m != null) {
+            try { m.stop(); } catch (Throwable ignored) {}
+            try { m.reset(); m.release(); } catch (Throwable ignored) {}
+            micFreeAt = System.currentTimeMillis() + SETTLE_MS;
+        }
+        if (recFile != null) { try { recFile.delete(); } catch (Throwable ignored) {} recFile = null; }
     }
 
     /* ───────────── remembering ───────────── */
@@ -453,6 +626,8 @@ public class Bridge {
 
     public void release() {
         releaseAsr();
+        levelStop();
+        recDiscard();
         try { if (tts != null) { tts.stop(); tts.shutdown(); } } catch (Throwable ignored) {}
         tts = null;
     }
