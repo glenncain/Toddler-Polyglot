@@ -303,35 +303,35 @@ const nativeSpeak = (text,langTag)=>new Promise(res=>{
 /* ══ 1. the same thirty objects, in all four ══ */
 const OBJ=[
 ["cup","🥤","cup","taza",["コップ","koppu"],["杯子","beizi"],"when you hand her the cup at dinner"],
-["dog","🐶","dog","perro",["いぬ","inu"],["狗","gou"],"the next dog you pass on the walk"],
-["shoe","👟","shoe","zapato",["くつ","kutsu"],["鞋","xie"],"at the door, one shoe in each hand"],
+["dog","🐶","dog","perro",["いぬ","inu",["犬","イヌ"]],["狗","gou"],"the next dog you pass on the walk"],
+["shoe","👟","shoe","zapato",["くつ","kutsu",["靴"]],["鞋","xie"],"at the door, one shoe in each hand"],
 ["door","🚪","door","puerta",["ドア","doa"],["门","men"],"every time she shuts one behind her"],
-["cat","🐱","cat","gato",["ねこ","neko"],["猫","mao"],"in a book, before you turn the page"],
+["cat","🐱","cat","gato",["ねこ","neko",["猫","ネコ"]],["猫","mao"],"in a book, before you turn the page"],
 ["ball","⚽","ball","pelota",["ボール","booru"],["球","qiu"],"before you roll it back to her"],
-["water","💧","water","agua",["みず","mizu"],["水","shui"],"when she asks for a drink"],
+["water","💧","water","agua",["みず","mizu",["水"]],["水","shui"],"when she asks for a drink"],
 ["milk","🥛","milk","leche",["ミルク","miruku"],["牛奶","niunai"],"pouring, before she gets the cup"],
-["apple","🍎","apple","manzana",["りんご","ringo"],["苹果","pingguo"],"holding it up before you cut it"],
+["apple","🍎","apple","manzana",["りんご","ringo",["林檎","リンゴ"]],["苹果","pingguo"],"holding it up before you cut it"],
 ["banana","🍌","banana","plátano",["バナナ","banana"],["香蕉","xiangjiao"],"while you peel it"],
-["bird","🐦","bird","pájaro",["とり","tori"],["鸟","niao"],"pointing out the window"],
-["fish","🐟","fish","pez",["さかな","sakana"],["鱼","yu"],"at the fish counter"],
-["hand","✋","hand","mano",["て","te"],["手","shou"],"washing hands before dinner"],
-["foot","🦶","foot","pie",["あし","ashi"],["脚","jiao"],"putting socks on"],
-["eye","👁️","eye","ojo",["め","me"],["眼睛","yanjing"],"in the mirror together"],
-["mouth","👄","mouth","boca",["くち","kuchi"],["嘴","zui"],"wiping her face after eating"],
-["hat","🎩","hat","sombrero",["ぼうし","booshi"],["帽子","maozi"],"on the way out the door"],
-["sock","🧦","sock","calcetín",["くつした","kutsushita"],["袜子","wazi"],"getting dressed in the morning"],
-["book","📖","book","libro",["ほん","hon"],["书","shu"],"when she picks tonight's story"],
-["car","🚗","car","coche",["くるま","kuruma"],["车","che"],"buckling her into the seat"],
-["chair","🪑","chair","silla",["いす","isu"],["椅子","yizi"],"as she climbs into hers"],
+["bird","🐦","bird","pájaro",["とり","tori",["鳥","トリ"]],["鸟","niao"],"pointing out the window"],
+["fish","🐟","fish","pez",["さかな","sakana",["魚","サカナ"]],["鱼","yu"],"at the fish counter"],
+["hand","✋","hand","mano",["て","te",["手"]],["手","shou"],"washing hands before dinner"],
+["foot","🦶","foot","pie",["あし","ashi",["足","脚"]],["脚","jiao"],"putting socks on"],
+["eye","👁️","eye","ojo",["め","me",["目"]],["眼睛","yanjing"],"in the mirror together"],
+["mouth","👄","mouth","boca",["くち","kuchi",["口"]],["嘴","zui"],"wiping her face after eating"],
+["hat","🎩","hat","sombrero",["ぼうし","booshi",["帽子"]],["帽子","maozi"],"on the way out the door"],
+["sock","🧦","sock","calcetín",["くつした","kutsushita",["靴下"]],["袜子","wazi"],"getting dressed in the morning"],
+["book","📖","book","libro",["ほん","hon",["本"]],["书","shu"],"when she picks tonight's story"],
+["car","🚗","car","coche",["くるま","kuruma",["車"]],["车","che"],"buckling her into the seat"],
+["chair","🪑","chair","silla",["いす","isu",["椅子"]],["椅子","yizi"],"as she climbs into hers"],
 ["bed","🛏️","bed","cama",["ベッド","beddo"],["床","chuang"],"the last thing before lights out"],
 ["spoon","🥄","spoon","cuchara",["スプーン","supuun"],["勺子","shaozi"],"handing it over, not before"],
 ["bread","🍞","bread","pan",["パン","pan"],["面包","mianbao"],"passing her a piece at the table"],
-["egg","🥚","egg","huevo",["たまご","tamago"],["蛋","dan"],"cracking one at breakfast"],
-["flower","🌸","flower","flor",["はな","hana"],["花","hua"],"on the walk, before she picks it"],
-["tree","🌳","tree","árbol",["き","ki"],["树","shu"],"looking up from the buggy"],
-["moon","🌙","moon","luna",["つき","tsuki"],["月亮","yueliang"],"at the window after bath"],
-["star","⭐","star","estrella",["ほし","hoshi"],["星星","xingxing"],"lights out, curtains open"],
-["sun","☀️","sun","sol",["たいよう","taiyoo"],["太阳","taiyang"],"opening the curtains"]
+["egg","🥚","egg","huevo",["たまご","tamago",["卵","玉子"]],["蛋","dan"],"cracking one at breakfast"],
+["flower","🌸","flower","flor",["はな","hana",["花"]],["花","hua"],"on the walk, before she picks it"],
+["tree","🌳","tree","árbol",["き","ki",["木"]],["树","shu"],"looking up from the buggy"],
+["moon","🌙","moon","luna",["つき","tsuki",["月"]],["月亮","yueliang"],"at the window after bath"],
+["star","⭐","star","estrella",["ほし","hoshi",["星"]],["星星","xingxing"],"lights out, curtains open"],
+["sun","☀️","sun","sol",["たいよう","taiyoo",["太陽"]],["太阳","taiyang"],"opening the curtains"]
 ];
 const LANGS={
  en:{name:"English",flag:"🇬🇧",code:"en-US",hex:"#6A4C93",on:"#F7F3FB"},
@@ -345,7 +345,8 @@ const ALL=[];
 OBJ.forEach(o=>LK.forEach(l=>{
   const v=o[IDX[l]];
   ALL.push({id:o[0]+":"+l,obj:o[0],lang:l,emoji:o[1],
-            say:Array.isArray(v)?v[0]:v, read:Array.isArray(v)?v[1]:v, moment:o[6]});
+            say:Array.isArray(v)?v[0]:v, read:Array.isArray(v)?v[1]:v,
+            alt:(Array.isArray(v)&&Array.isArray(v[2]))?v[2]:[], moment:o[6]});
 }));
 const byId=id=>ALL.find(a=>a.id===id);
 
@@ -462,7 +463,7 @@ function lev(a,b){const m=[...Array(a.length+1)].map((_,i)=>[i,...Array(b.length
  for(let i=1;i<=a.length;i++)for(let j=1;j<=b.length;j++)m[i][j]=Math.min(m[i-1][j]+1,m[i][j-1]+1,m[i-1][j-1]+(a[i-1]===b[j-1]?0:1));return m[a.length][b.length];}
 function heard(t,e){
   t=norm(t); if(t.length<1) return false;
-  for(const g of [norm(e.say),norm(e.read)]){
+  for(const g of [norm(e.say),norm(e.read),...(e.alt||[]).map(norm)]){
     if(!g) continue;
     if(t.includes(g)||g.includes(t)) return true;
     if(lev(t,g)<=Math.max(1,Math.floor(g.length*.45))) return true;      // she will not say kutsu cleanly

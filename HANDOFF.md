@@ -25,6 +25,7 @@ Hard constraints from the original brief, none of them negotiable:
     app/src/main/java/.../MainActivity  WebView host, https asset serving, file picker
     app/src/main/java/.../Bridge.java   native TTS, SpeechRecognizer, key-value store
     .github/workflows/build-apk.yml     builds the APK on GitHub Actions
+    tools/matcher-check.mjs             pins the speech matcher, loose parts included
 
 `index.html` is byte-identical to the standalone browser build. It detects
 `window.AndroidBridge` at runtime and falls back to web APIs when absent. **Keep it that
@@ -63,26 +64,47 @@ Note for the record: `com.google.android.tts` holds the microphone permission, s
 "recognition service is denied the mic" theory — the last one standing before this run —
 was wrong. It was worth checking and it is now checked; the panel still reports it.
 
-## What is left
+## Japanese: heard correctly, rejected by the word list
 
-**Japanese returns `asr=silent`: the recogniser takes the microphone and then answers with
-neither a result nor an error.** The other three languages work, so this is specific to
-`ja-JP` on this tablet, not a general fault.
+The 2026-09-08 15:45 check closed this one too:
 
-A recogniser that never answers used to hold the microphone for as long as the app lived,
-which for her means a card that never advances and no way back. There is now an
-eight-second watchdog: the attempt is released and reported as `no-response`, so the panel
-says what happened and the microphone comes back. That contains the symptom; it does not
-explain it.
+    Japanese: asr=heard opened=yes heard="靴 普通"  → hears, did not match
 
-To take it further, try Japanese again on the next build. If it still returns nothing,
-`adb logcat | grep -i -E "speech|recogn"` during that tap is the next step — a machine with
-adb was never available during any of this debugging, and it is now the binding constraint
-rather than the code.
+靴 is *kutsu*. The recogniser had it right and the matcher threw it away, because the
+Japanese entries only ever held kana and romaji — `["くつ","kutsu"]` — while ja-JP returns
+**kanji**. Mandarin never hit this only because its data was already hanzi.
 
-**One caveat on the offline memory.** A language marked as having no on-device model stays
-marked. If you later download the Japanese or Mandarin offline speech pack, clear the app's
-storage (or the `em:asr-offline:` keys) so it tries offline again.
+The matcher itself is untouched. Each Japanese word now carries its other spellings in a
+third slot, and `heard()` tries those too:
+
+    ["くつ","kutsu",["靴"]]
+
+Kana and romaji still count, so nothing that worked before stops working. Katakana
+loanwords (コップ, ドア, ボール, ミルク, バナナ, ベッド, スプーン, パン) were already
+returned as katakana and were left alone.
+
+`tools/matcher-check.mjs` pins this, the four device transcripts, and the loose behaviour
+the brief insists on — "tutu" for *kutsu* is a test case, so nobody can tighten the matcher
+to make something else pass without the run going red. `node tools/matcher-check.mjs` from
+the repo root; needs playwright.
+
+## What has not been tested
+
+Everything above was measured on the tablet, by an adult, through the parent panel. **None
+of it has been in front of the child**, and the parent voice recordings have never been
+exercised beyond a round-trip against a mock bridge. That is the next real test, and it is
+not one this document can do anything about.
+
+Two known loose ends:
+
+* **The offline memory is sticky.** A language marked as having no on-device model stays
+  marked, across launches, by design. If you later install the Japanese or Mandarin offline
+  speech pack, clear the app's storage (or the `em:asr-offline:` keys) so it tries offline
+  again.
+* **The recogniser can still answer with nothing at all.** An eight-second watchdog
+  releases it and reports `no-response`, so a card cannot wedge, but if that starts showing
+  up often, `adb logcat | grep -i -E "speech|recogn"` during the tap is the way in. A
+  machine with adb was never available during any of this debugging.
 
 ## Building
 
