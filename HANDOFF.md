@@ -114,6 +114,39 @@ The card is meant not to advance until it hears her, so a dead recogniser is now
 while the same card is still on screen, up to six times, and the ear goes out if it truly
 cannot listen rather than lying about it.
 
+## A review pass, and what it turned up
+
+Two passes over the whole thing after the faults above. Five more, in the order they
+matter. `tools/session-check.mjs` pins the first three.
+
+**The bottom edge of her screen advanced the card on any touch.** `#hands` is
+`left:0;right:0;bottom:0` with two `flex:1` buttons 74px tall — so the entire bottom strip
+was ✓ on the left half and → on the right, and a resting palm marked a word said and moved
+her on. These are meant for the parent sitting next to her; they now want a deliberate
+press (`HOLD_MS`, 420ms) rather than a brush. Revert by pointing `parentOnly` back at
+`onclick` if it gets in the way.
+
+**Tapping the picture while the app was speaking shut the microphone for six seconds.**
+Android speaks with `QUEUE_FLUSH`, so a second utterance drops the one in flight and the
+dropped one never reports done. `say()` then sat on its six-second timeout, and `heard0`
+stopped one line before opening the ear. Measured against the previous build: 6813ms to
+open the ear, against 1083ms now. This is the "it sometimes does not turn on the mic right
+after pressing the picture" from real use.
+
+**The app could hear itself and give her the tick for it.** The seven-second repeat and
+the tap-to-replay both spoke the word while the recogniser was listening. The microphone
+picked up the tablet, the matcher agreed the word had been said, and the card advanced —
+marking a word learned that she had never once said aloud. Speaking now stops the
+recogniser and restarts it afterwards.
+
+**An interrupted recording never settled its promise.** `playClip` paused the previous clip
+without resolving it, so whatever awaited it waited forever. This one only bites once there
+are parent recordings, which is why it had not shown up yet.
+
+**A second session in one day counted as a second day**, inflating `S.day` and skewing which
+words came back for review. And returning from another app left the card with a lit ear and
+no recogniser, because Android stops it on pause and nothing restarted it.
+
 ## What has not been tested
 
 Everything above was measured on the tablet, by an adult, through the parent panel. **None

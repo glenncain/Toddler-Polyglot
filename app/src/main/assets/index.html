@@ -424,16 +424,30 @@ const pickVoice=c=>{
   return voices.find(v=>v.lang&&v.lang.replace("_","-")===c)||voices.find(v=>v.lang&&v.lang.toLowerCase().startsWith(c.split("-")[0]));
 };
 
-let audioEl=null;
+let audioEl=null, audioRes=null;
 function playClip(url){
   return new Promise(res=>{
+    /* Interrupting a clip used to leave the promise it was awaited on unsettled for
+       good. say() then never returned, and heard0 stopped one line short of opening
+       the ear — a tap during the playback left the microphone off for the whole card. */
+    if(audioRes){ const stale=audioRes; audioRes=null; stale(false); }
+    try{ if(audioEl) audioEl.pause(); }catch(e){}
     try{
-      if(audioEl){audioEl.pause();}
-      audioEl=new Audio(url);
-      audioEl.onended=()=>res(true); audioEl.onerror=()=>res(false);
-      audioEl.play().catch(()=>res(false));
-    }catch(e){res(false)}
+      const a=new Audio(url);
+      audioEl=a; audioRes=res;
+      const done=ok=>{
+        if(audioEl===a) audioEl=null;
+        if(audioRes===res){ audioRes=null; res(ok); }
+      };
+      a.onended=()=>done(true); a.onerror=()=>done(false);
+      a.play().catch(()=>done(false));
+    }catch(e){ if(audioRes===res) audioRes=null; res(false); }
   });
+}
+function stopClip(){
+  try{ if(audioEl) audioEl.pause(); }catch(e){}
+  audioEl=null;
+  if(audioRes){ const stale=audioRes; audioRes=null; stale(false); }
 }
 function synth(e){
   if(NB) return nativeSpeak(e.say, LANGS[e.lang].code);
@@ -456,8 +470,17 @@ async function sayOnce(e){
   }
   return synth(e);
 }
+let speaking=false;
 async function say(e,times=2){
-  for(let i=0;i<times;i++){ if(ended||queue[idx]!==e) return; await sayOnce(e); if(i<times-1) await new Promise(r=>setTimeout(r,480)); }
+  if(speaking) return;                       // two playbacks at once deadlocked the card
+  speaking=true;
+  try{
+    for(let i=0;i<times;i++){
+      if(ended||queue[idx]!==e) return;
+      await sayOnce(e);
+      if(i<times-1) await new Promise(r=>setTimeout(r,480));
+    }
+  } finally { speaking=false; }
 }
 
 /* ══ 5. hearing a three-year-old ══ */
@@ -536,7 +559,7 @@ function card(){
   clearT(); unlisten();
   if(ended) return;
   if(idx>=queue.length||Date.now()-t0>=ELEVEN) return finish();
-  const e=queue[idx]; busy=false; tapped=false; prompts=0; cardT0=Date.now();
+  const e=queue[idx]; busy=false; tapped=false; prompts=0; cardHit=null; stopClip(); cardT0=Date.now();
   document.documentElement.style.setProperty("--stage",LANGS[e.lang].hex);
   document.documentElement.style.setProperty("--on",LANGS[e.lang].on);
   const p=$("picture");
@@ -544,25 +567,40 @@ function card(){
   $("ear").classList.remove("on");
   later(()=>{ if(!tapped&&!ended&&queue[idx]===e) heard0(e); },9000);   // she never tapped; nudge her
 }
+let cardHit=null;
+function openEar(e){
+  if(!cardHit||ended||busy||queue[idx]!==e) return;
+  $("ear").classList.add("on");
+  listen(e,cardHit);
+}
+/* The recogniser must never be running while the app itself speaks. The microphone hears
+   the tablet say the word, the matcher agrees it was said, and she gets a tick for the
+   app's own voice — a card advancing on its own, and a word marked learned that she has
+   never once said out loud. */
+async function replay(e,times){
+  unlisten(); $("ear").classList.remove("on");
+  await say(e,times);
+  openEar(e);
+}
 async function heard0(e){                                              // play, then open the ear
   if(ended||queue[idx]!==e) return;
   tapped=true;
   $("picture").classList.remove("invite");
   await say(e,2);
   if(ended||queue[idx]!==e) return;
-  $("ear").classList.add("on");
-  listen(e,()=>advance(true,true));
-  later(()=>{ if(!busy&&queue[idx]===e){prompts++; say(e,1);} },7000);  // one quiet repeat
+  cardHit=()=>advance(true,true);
+  openEar(e);
+  later(()=>{ if(!busy&&queue[idx]===e){prompts++; replay(e,1);} },7000);  // one quiet repeat
   later(()=>{ if(!busy&&queue[idx]===e) advance(false); },19000);
 }
 $("picture").onclick=()=>{
   const e=queue[idx];
   if(ended||!e) return;
-  if(!tapped) heard0(e); else say(e,1);
+  if(!tapped) heard0(e); else replay(e,1);
 };
 function advance(said,unprompted){
   if(busy||ended) return; busy=true;
-  clearT(); unlisten(); $("ear").classList.remove("on");
+  clearT(); unlisten(); cardHit=null; $("ear").classList.remove("on");
   const e=queue[idx],st=w(e.id);
   st.seen++; st.lastDay=S.day;
   if(said){ st.said++; if(unprompted&&prompts===0) st.unprompted++; st.missStreak=0; }
@@ -578,8 +616,26 @@ function advance(said,unprompted){
   }
   idx++; later(card,said?900:300);
 }
-$("yes").onclick=()=>advance(true,false);
-$("skip").onclick=()=>advance(false);
+/* These two are for the parent, and they stretch across the entire bottom edge — which
+   is exactly where a three-year-old's hand sits while she holds the tablet. A brush of a
+   palm used to mark a word said and move her on. They now want a deliberate press. */
+const HOLD_MS=420;
+function parentOnly(el,fn){
+  let t=null;
+  const stop=()=>{ clearTimeout(t); t=null; };
+  el.addEventListener("pointerdown",ev=>{ ev.preventDefault(); stop(); t=setTimeout(()=>{ t=null; fn(); },HOLD_MS); });
+  ["pointerup","pointerleave","pointercancel"].forEach(x=>el.addEventListener(x,stop));
+}
+parentOnly($("yes"),()=>advance(true,false));
+parentOnly($("skip"),()=>advance(false));
+
+/* Android stops the recogniser when the app goes to the background, and nothing used to
+   start it again — she came back to a lit ear with nothing behind it. */
+document.addEventListener("visibilitychange",()=>{
+  if(document.visibilityState!=="visible"||ended||busy||!tapped) return;
+  const e=queue[idx];
+  if(e&&cardHit) openEar(e);
+});
 
 let ac=null;
 function chime(){
@@ -599,7 +655,9 @@ function chime(){
 /* ══ 7. the end, said without a word ══ */
 function finish(){
   if(ended) return; ended=true;
-  clearT(); unlisten(); try{speechSynthesis.cancel()}catch(e){}
+  clearT(); unlisten(); cardHit=null; stopClip();
+  try{speechSynthesis.cancel()}catch(e){}
+  if(NB){ try{ NB.shutUp(); }catch(e){} }
   $("ear").classList.remove("on"); $("picture").classList.remove("invite");
   $("hands").style.display="none";
   document.documentElement.style.setProperty("--stage","var(--night)");
@@ -610,8 +668,10 @@ function finish(){
 
   const today=new Date().toISOString().slice(0,10);
   const y=new Date(Date.now()-864e5).toISOString().slice(0,10);
-  S.streak=(S.lastDate===y||S.lastDate===today)?(S.lastDate===today?S.streak:S.streak+1):1;
-  S.lastDate=today; S.day++;
+  const sameDay = S.lastDate===today;
+  S.streak=(S.lastDate===y||sameDay)?(sameDay?S.streak:S.streak+1):1;
+  S.lastDate=today;
+  if(!sameDay) S.day++;              // a second run today is still today, not tomorrow
   saveState(); paintParent();
   later(()=>{ $("picture").style.background=""; $("picture").style.boxShadow=""; },600);
 }
