@@ -517,6 +517,38 @@ public class Bridge {
         if (recFile != null) { try { recFile.delete(); } catch (Throwable ignored) {} recFile = null; }
     }
 
+    /* Android does not do the recognising itself — it binds to a RecognitionService in
+       some other app, usually Google's, and that app records the audio under its own
+       microphone permission. Ours being granted says nothing whatsoever about its. A
+       recogniser that opens, hears a clear voice and returns no-match on every language
+       looks exactly like one that is being handed silence, so name the service and say
+       whether it is allowed the microphone at all. */
+    @JavascriptInterface
+    public String recognizerInfo() {
+        String svc = null, pkg = null;
+        try {
+            svc = android.provider.Settings.Secure.getString(
+                    act.getContentResolver(), "voice_recognition_service");
+            if (svc != null) {
+                android.content.ComponentName cn = android.content.ComponentName.unflattenFromString(svc);
+                if (cn != null) pkg = cn.getPackageName();
+            }
+        } catch (Throwable ignored) {}
+
+        String micPerm = "?";
+        if (pkg != null) {
+            try {
+                micPerm = act.getPackageManager()
+                        .checkPermission(Manifest.permission.RECORD_AUDIO, pkg)
+                            == PackageManager.PERMISSION_GRANTED ? "granted" : "denied";
+            } catch (Throwable ignored) {}
+        }
+        return "{\"service\":" + q(svc == null ? "none" : svc)
+             + ",\"package\":" + q(pkg == null ? "?" : pkg)
+             + ",\"mic\":" + q(micPerm)
+             + ",\"available\":" + asrAvailable() + "}";
+    }
+
     /* ───────────── remembering ───────────── */
 
     private File fileFor(String key) {

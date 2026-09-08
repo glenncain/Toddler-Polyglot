@@ -764,7 +764,7 @@ function stopRec(){
    Every claim on this panel is measured on the device, not assumed. The two
    per-language tests need you in the room, because only you can say whether a
    voice really came out of the speaker. */
-const DIAG={ran:false,mic:null,micErr:"",peak:0,asr:null,asrLog:[],store:null,rec:null,native:null,langs:{}};
+const DIAG={ran:false,mic:null,micErr:"",peak:0,asr:null,asrLog:[],store:null,rec:null,native:null,recog:null,langs:{}};
 LK.forEach(l=>DIAG.langs[l]={voice:null,spoke:null,asr:null,text:"",err:"",opened:false});
 const TESTWORD=l=>ALL.find(a=>a.obj==="shoe"&&a.lang===l);
 
@@ -799,6 +799,10 @@ async function diagRun(){
   /* Ask the platform directly before the page tries. If the app can open the mic and
      the WebView cannot, that is a WebView problem and no amount of permission
      fiddling will help; if neither can, it is the device. Nothing else tells them apart. */
+  DIAG.recog = null;
+  if(NB && NB.recognizerInfo){
+    try{ DIAG.recog = JSON.parse(NB.recognizerInfo()); }catch(e){}
+  }
   DIAG.native = null;
   if(NB && NB.micProbe){
     try{ DIAG.native = JSON.parse(NB.micProbe()); }
@@ -901,7 +905,7 @@ function verdict(l){
   if(!d.voice && !recorded(l)) return ["bad","record this one"];
   if(!d.voice && recorded(l))  return ["good","your voice"];
   if(d.spoke==="silent")       return ["bad","no sound came out"];
-  if(d.asr==="failed")         return ["bad", d.err||"recogniser failed"];
+  if(d.asr==="failed")         return ["bad","did not recognise"];
   if(d.asr==="never-opened")   return ["bad","never got the mic"];
   if(d.asr==="matched")        return ["good","ready"];
   if(d.asr==="heard")          return ["warn","hears, did not match"];
@@ -951,6 +955,17 @@ function paintDiag(){
     DIAG.asr ? "Present. Whether it works offline is the per-language test below."
              : "Absent. She can still use the app; you press ✓ when she says the word.",
     pill(DIAG.asr?"good":"warn", DIAG.asr?"present":"missing")));
+
+  if(NB && DIAG.recog){
+    const r=DIAG.recog, who=r.package&&r.package!=="?" ? r.package : "an unnamed app";
+    box.appendChild(line("Who does the listening",
+      r.mic==="denied"
+        ? "The recogniser is "+who+", a separate app, and its own microphone permission is off. Grant it there — this app's permission does not cover it."
+      : r.mic==="granted"
+        ? "The recogniser is "+who+", a separate app, and it is allowed the microphone."
+        : "The recogniser is "+who+". Its microphone permission could not be read.",
+      pill(r.mic==="denied"?"bad":(r.mic==="granted"?"good":"warn"), "its mic "+(r.mic||"?"))));
+  }
 
   box.appendChild(line("Recording your voices",
     DIAG.rec ? "You can record the words in your own voice." : "No recorder here, so every word falls back to synthesis.",
@@ -1010,6 +1025,7 @@ function diagReport(){
   L.push("recogniser: "+(DIAG.asr?"present":"missing")
     +(DIAG.asrLog.length?" attempts="+DIAG.asrLog.join(" → "):""));
   L.push("capture:    "+(nativeCap?"native (this WebView refuses getUserMedia)":"web getUserMedia"));
+  L.push("listener:   "+(DIAG.recog ? (DIAG.recog.package||"?")+" mic="+(DIAG.recog.mic||"?") : "not probed"));
   L.push("recording:  "+(DIAG.rec?"available":"missing"));
   L.push("storage:    "+(DIAG.store||"not tested"));
   L.push("");

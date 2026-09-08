@@ -64,41 +64,48 @@ would be needed:
 
 ### What is still open
 
-The recogniser now starts, takes the microphone (`opened=yes`) and comes back `no-match`.
-That is a different failure from the original silence, and a much smaller one: it is
-listening and not recognising, rather than never running.
+The microphone is fine. The native meter, run while a parent talked, read a **63% peak**
+("hears you"), and the native probe opened at 34%. So the "mic captures silence"
+hypothesis is dead — do not spend another round on it.
 
-Two candidates, and **the native level meter now distinguishes them**, which nothing could
-before — the old meter ran on `getUserMedia`, which is exactly what does not work here:
+What remains: the recogniser takes the microphone (`opened=yes`), is handed clearly
+audible audio, and returns `no-match` on **every language, including English over the
+network**. Google recognising an adult saying "shoe" in en-US is not a hard problem, so
+something is wrong upstream of the recognition itself.
 
-1. **The microphone opens but captures near-silence.** The native probe read a 1% peak,
-   but it samples 400ms at the start of the check when nobody is speaking yet, so that
-   number means nothing on its own. The meter running while you talk does mean something.
-2. **The utterance fell between two attempts.** The offline-first retry could start its
-   network attempt after you had already finished saying the word. This has been narrowed:
-   an offline attempt that *reached the microphone* and returned `no-match` is now taken at
-   its word rather than retried, and a language whose offline model is genuinely missing is
-   remembered so the split only ever happens once.
+    English:  online:no-match
+    Mandarin: offline:language-not-supported/no-mic → online:no-match
+
+The Mandarin line is the offline path behaving exactly as expected: no on-device model,
+never got the microphone, retried over the network. That part works. It is the online
+result that makes no sense.
+
+### The next thing to check, and why
+
+**Android does not do the recognising.** `SpeechRecognizer` binds to a `RecognitionService`
+living in another app — usually Google's — and *that app* records the audio, under its own
+microphone permission. This app's permission says nothing about its. A recogniser whose
+service is denied the microphone opens, reports `onReadyForSpeech`, receives silence and
+returns `no-match`, which is precisely what the tablet reports.
+
+The panel now names that service and reads its permission: the **"Who does the listening"**
+row. It is the only row that matters on the next run.
 
 ## What to do next
 
-Install, hold the top-left corner 1.6s, **Run the check**, and **talk while the meter is
-running**.
+Install, hold the top-left corner 1.6s, **Run the check**, and read the "Who does the
+listening" row.
 
-* **The meter moves** → the microphone hears you. The `no-match` is a recognition problem:
-  look at `attempts=` in the saved report to see whether the offline and online attempts
-  both failed, and which one had the mic.
-* **The meter stays flat while you talk** → the microphone opens and captures silence.
-  That is an audio-routing fault, and every path in the app is downstream of it. Nothing
-  in this codebase can fix it; check whether another app holds the mic, or whether the
-  tablet has a mic mute or a case over it.
+* **"its mic denied"** → that is the bug. Grant the microphone to the named app in Android
+  settings (Settings → Apps → that app → Permissions → Microphone). Nothing in this
+  codebase can do it, and this app's own permission does not cover it.
+* **"its mic granted"** → permission is not the answer either, and the panel has taken this
+  as far as it can. `adb logcat | grep -i -E "speech|recogn|audio"` during a failed 🎤 tap
+  is the next step; a real machine with adb was never available during any of the debugging
+  that produced this document, and that is now the binding constraint, not the code.
 
-The saved report carries all of it: `capture:` says which path is in use, `attempts=`
-lists every recogniser attempt with whether it got the microphone.
-
-`adb logcat | grep -i -E "speech|recogn|audio|webview"` during a failed attempt remains
-the fastest route if the panel is not enough, and was unavailable throughout the
-tablet-only debugging that produced the first version of this document.
+The saved report carries `listener:` with the service package and its permission, plus
+`attempts=` listing every recogniser attempt and whether it got the microphone.
 
 ## Building
 
