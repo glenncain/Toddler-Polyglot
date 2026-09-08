@@ -59,7 +59,6 @@ public class Bridge {
        advances it for something she never said. The page ignores anything not stamped with
        the listen it asked for. */
     private int asrSeq = 0;
-    private volatile int asrCur = -1;
     private final Map<String, Boolean> offlineOk = new HashMap<>();
     private static final String OFFLINE_KEY = "em:asr-offline:";
 
@@ -248,7 +247,6 @@ public class Bridge {
         asrLang = langTag;
         asrOffline = preferOffline;
         asrOpened = false;
-        asrCur = seq;
         try {
             asr = SpeechRecognizer.createSpeechRecognizer(act);
             asr.setRecognitionListener(new RecognitionListener() {
@@ -367,7 +365,6 @@ public class Bridge {
         asrListening = false;
         asrLang = null;
         asrOffline = false;
-        asrCur = -1;
         if (had) micFreeAt = System.currentTimeMillis() + SETTLE_MS;
     }
 
