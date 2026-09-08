@@ -54,6 +54,13 @@ public class Bridge {
     private boolean asrOffline = false;
     private boolean asrOpened = false;               // did this attempt reach the microphone
     private final Map<String, Boolean> offlineOk = new HashMap<>();
+    private static final String OFFLINE_KEY = "em:asr-offline:";
+
+    /* A recogniser that answers with neither a result nor an error keeps the microphone
+       for as long as the app lives. Nothing else in here can take it back, and she would
+       just be standing in front of a card that never advances. */
+    private static final long ASR_MAX_MS = 8000;   // under the panel's own 9s, so this verdict wins
+    private Runnable asrWatchdog;
 
     private Thread levelThread;
     private volatile boolean levelRun = false;
@@ -210,7 +217,7 @@ public class Bridge {
             releaseAsr();
             // once a language is known to have no on-device model, stop splitting her
             // speaking window between a doomed offline attempt and the retry
-            final boolean tryOffline = !Boolean.FALSE.equals(offlineOk.get(langTag));
+            final boolean tryOffline = offlineWorthTrying(langTag);
             long wait = micBusyFor();
             if (wait > 0) ui.postDelayed(() -> begin(langTag, tryOffline), wait);
             else begin(langTag, tryOffline);
@@ -263,7 +270,7 @@ public class Bridge {
                         toJs("window.__asrError && window.__asrError(" + q(errName(e)) + ","
                              + wasOffline + "," + hadMic + "," + retrying + ")");
                         if (retrying) {
-                            offlineOk.put(lang, false);
+                            markOfflineDead(lang);
                             ui.postDelayed(() -> begin(lang, false), SETTLE_MS);
                         }
                     });
@@ -275,6 +282,7 @@ public class Bridge {
                 private void push(Bundle b) {
                     ArrayList<String> got = b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
                     if (got == null || got.isEmpty()) return;
+                    cancelWatchdog();          // it is alive and talking to us
                     StringBuilder all = new StringBuilder();
                     for (String s : got) all.append(' ').append(s);
                     toJs("window.__asrHeard && window.__asrHeard(" + q(all.toString()) + ")");
@@ -292,6 +300,14 @@ public class Bridge {
             }
             asr.startListening(i);
             asrListening = true;
+            cancelWatchdog();
+            asrWatchdog = () -> {
+                if (asr == null) return;
+                releaseAsr();
+                toJs("window.__asrError && window.__asrError(\"no-response\","
+                     + preferOffline + ",true,false)");
+            };
+            ui.postDelayed(asrWatchdog, ASR_MAX_MS);
         } catch (Throwable t) {
             asrListening = false;
             releaseAsr();
@@ -300,13 +316,37 @@ public class Bridge {
         }
     }
 
+    /* Whether a language has an on-device model is a fact about the tablet, not about
+       this launch. Keeping it in memory only meant every session paid the doomed offline
+       attempt again on every language — a second or two of her standing there saying a
+       word into an attempt that cannot succeed, every single card. */
+    private boolean offlineWorthTrying(String lang) {
+        if (lang == null) return true;
+        Boolean cached = offlineOk.get(lang);
+        if (cached != null) return cached;
+        boolean ok = !"0".equals(prefGet(OFFLINE_KEY + lang));
+        offlineOk.put(lang, ok);
+        return ok;
+    }
+
+    private void markOfflineDead(String lang) {
+        if (lang == null) return;
+        offlineOk.put(lang, false);
+        try { prefSet(OFFLINE_KEY + lang, "0"); } catch (Throwable ignored) {}
+    }
+
     @JavascriptInterface
     public void stopListening() { ui.post(this::releaseAsr); }
 
     /* The old version left the recogniser alive after an error, so a failed listen kept
        the microphone bound for the rest of the session and everything that asked for it
        afterwards was refused. */
+    private void cancelWatchdog() {
+        if (asrWatchdog != null) { ui.removeCallbacks(asrWatchdog); asrWatchdog = null; }
+    }
+
     private void releaseAsr() {
+        cancelWatchdog();
         boolean had = (asr != null);
         try { if (asr != null) { asr.cancel(); asr.destroy(); } } catch (Throwable ignored) {}
         asr = null;

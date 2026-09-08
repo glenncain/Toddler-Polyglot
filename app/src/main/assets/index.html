@@ -989,6 +989,7 @@ function paintDiag(){
     else if(d.text) sub="It heard: “"+d.text+"”";
     else if(d.err) sub="The recogniser refused: "+d.err;
     else if(d.asr==="never-opened") sub="The recogniser never took the microphone. Something else is holding it.";
+    else if(d.asr==="silent") sub="It took the microphone and never answered. Say the word louder, or closer.";
     else if(!d.voice) sub="No installed voice for this language.";
     else sub="Voice installed. 🔊 speaks the test word, 🎤 listens for you.";
     t.innerHTML="<strong>"+LANGS[l].flag+" "+LANGS[l].name+"</strong><small>"+sub+"</small>";

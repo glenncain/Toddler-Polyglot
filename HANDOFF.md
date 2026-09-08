@@ -30,82 +30,59 @@ Hard constraints from the original brief, none of them negotiable:
 `window.AndroidBridge` at runtime and falls back to web APIs when absent. **Keep it that
 way** — do not fork it into an Android-only copy.
 
-## The bug, as far as it has been taken
+## The microphone bug: fixed
 
-Device: Lenovo TB305FU, Android API 35.
+Device: Lenovo TB305FU, Android API 35. Both microphone paths failed on the installed APK
+while Chrome on the same tablet worked. Both now work. The device check on 2026-09-08:
 
-Two microphone paths failed on the installed APK while Chrome on the same tablet worked.
-The first is now understood and fixed. The second is narrowed to one open question.
+    microphone: ok (peak 71%) origin=https:
+    native mic: opens (peak 64%)
+    listener:   com.google.android.tts mic=granted
 
-### What the device check answered
+    English:  asr=matched heard="shoe shoe shoe Shoe Show Shoe Show Shoe shoe"
+    Spanish:  asr=matched heard="zapato zapato zapato zapato zapato zapato za"
+    Mandarin: asr=matched heard="鞋鞋"
+    Japanese: asr=silent  opened=yes
 
-The panel now runs a native `AudioRecord` open immediately before the WebView tries the
-same thing. On the tablet, 2026-09-07:
+Three languages recognised, end to end. What it took, in the order the evidence forced:
 
-    microphone: denied (peak 0%) error=NotReadableError origin=https:
-    native mic: opens (peak 1%)
-    recogniser: present  last error=no-match (online)
-    English: spoke=ok asr=failed err=no-match (online) opened=yes
+1. **The errors were being thrown away.** `Bridge.onError()` set a flag and returned, so
+   every failure — of any cause — reached the page as silence. Nothing could be diagnosed
+   until that was fixed, and it is the reason the previous rounds went in circles.
+2. **`getUserMedia` is refused by this WebView, permanently.** A native `AudioRecord`
+   opened the microphone in the same process, at the same moment, with the same permission,
+   while the WebView returned `NotReadableError`. Not permission, not origin, not hardware
+   — the three things earlier rounds spent themselves on. Capture moved to the bridge.
+3. **A failed listen used to keep the microphone.** The recogniser was never released on
+   error, so the first failure held the mic for the rest of the session.
+4. **`EXTRA_PREFER_OFFLINE` was set unconditionally,** so restoring `INTERNET` could never
+   have fixed this on its own. Offline is tried first and falls back to the network, and a
+   language with no on-device model is remembered so the fallback is paid once, not daily.
 
-**The app can open the microphone. The WebView cannot.** Same process, same permission,
-same moment, opposite results. That is not a permission problem, not an origin problem
-and not a hardware problem — the three things the previous round spent its time on. It is
-this WebView build refusing `getUserMedia`, and nothing granted from the outside will
-change it.
+Note for the record: `com.google.android.tts` holds the microphone permission, so the
+"recognition service is denied the mic" theory — the last one standing before this run —
+was wrong. It was worth checking and it is now checked; the panel still reports it.
 
-So capture moved to the native side, which is what the previous handoff already suspected
-would be needed:
+## What is left
 
-* `Bridge.levelStart()` / `levelStop()` — the level meter, read from `AudioRecord` and
-  pushed to the page as `__micLevel`.
-* `Bridge.recStart()` / `recStop()` — the parent's recordings, via `MediaRecorder`, handed
-  back as a `data:audio/mp4` URL so the page stores and plays them exactly as before.
-* `getUserMedia` is still the path in a plain browser. `nativeCap` picks between them.
+**Japanese returns `asr=silent`: the recogniser takes the microphone and then answers with
+neither a result nor an error.** The other three languages work, so this is specific to
+`ja-JP` on this tablet, not a general fault.
 
-### What is still open
+A recogniser that never answers used to hold the microphone for as long as the app lived,
+which for her means a card that never advances and no way back. There is now an
+eight-second watchdog: the attempt is released and reported as `no-response`, so the panel
+says what happened and the microphone comes back. That contains the symptom; it does not
+explain it.
 
-The microphone is fine. The native meter, run while a parent talked, read a **63% peak**
-("hears you"), and the native probe opened at 34%. So the "mic captures silence"
-hypothesis is dead — do not spend another round on it.
+To take it further, try Japanese again on the next build. If it still returns nothing,
+`adb logcat | grep -i -E "speech|recogn"` during that tap is the next step — a machine with
+adb was never available during any of this debugging, and it is now the binding constraint
+rather than the code.
 
-What remains: the recogniser takes the microphone (`opened=yes`), is handed clearly
-audible audio, and returns `no-match` on **every language, including English over the
-network**. Google recognising an adult saying "shoe" in en-US is not a hard problem, so
-something is wrong upstream of the recognition itself.
-
-    English:  online:no-match
-    Mandarin: offline:language-not-supported/no-mic → online:no-match
-
-The Mandarin line is the offline path behaving exactly as expected: no on-device model,
-never got the microphone, retried over the network. That part works. It is the online
-result that makes no sense.
-
-### The next thing to check, and why
-
-**Android does not do the recognising.** `SpeechRecognizer` binds to a `RecognitionService`
-living in another app — usually Google's — and *that app* records the audio, under its own
-microphone permission. This app's permission says nothing about its. A recogniser whose
-service is denied the microphone opens, reports `onReadyForSpeech`, receives silence and
-returns `no-match`, which is precisely what the tablet reports.
-
-The panel now names that service and reads its permission: the **"Who does the listening"**
-row. It is the only row that matters on the next run.
-
-## What to do next
-
-Install, hold the top-left corner 1.6s, **Run the check**, and read the "Who does the
-listening" row.
-
-* **"its mic denied"** → that is the bug. Grant the microphone to the named app in Android
-  settings (Settings → Apps → that app → Permissions → Microphone). Nothing in this
-  codebase can do it, and this app's own permission does not cover it.
-* **"its mic granted"** → permission is not the answer either, and the panel has taken this
-  as far as it can. `adb logcat | grep -i -E "speech|recogn|audio"` during a failed 🎤 tap
-  is the next step; a real machine with adb was never available during any of the debugging
-  that produced this document, and that is now the binding constraint, not the code.
-
-The saved report carries `listener:` with the service package and its permission, plus
-`attempts=` listing every recogniser attempt and whether it got the microphone.
+**One caveat on the offline memory.** A language marked as having no on-device model stays
+marked. If you later download the Japanese or Mandarin offline speech pack, clear the app's
+storage (or the `em:asr-offline:` keys) so it tries offline again.
 
 ## Building
 
