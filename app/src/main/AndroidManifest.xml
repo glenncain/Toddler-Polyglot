@@ -2,9 +2,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.RECORD_AUDIO"/>
-    <!-- No INTERNET permission on purpose. The brief said run it offline, and without
-         this line the app physically cannot phone home. Add it back only if you want
-         Google's online speech recogniser as a fallback. -->
+    <!-- INTERNET was deliberately omitted at first, because the brief said run it offline.
+         That appears to break Android's SpeechRecognizer on a tablet with no offline
+         speech data installed: it starts, reaches nothing, returns silence. Restored
+         until offline recognition is confirmed working on the target device. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
 
     <uses-feature android:name="android.hardware.microphone" android:required="false"/>
 
