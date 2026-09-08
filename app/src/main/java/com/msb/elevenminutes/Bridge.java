@@ -53,6 +53,13 @@ public class Bridge {
     private String asrLang = null;
     private boolean asrOffline = false;
     private boolean asrOpened = false;               // did this attempt reach the microphone
+    /* Every listen carries a number. A recogniser that is being torn down can still push a
+       result, and the page keeps only one callback slot, so an old card's transcript would
+       otherwise be handed to the card now on screen and judged against its word — which
+       advances it for something she never said. The page ignores anything not stamped with
+       the listen it asked for. */
+    private int asrSeq = 0;
+    private volatile int asrCur = -1;
     private final Map<String, Boolean> offlineOk = new HashMap<>();
     private static final String OFFLINE_KEY = "em:asr-offline:";
 
@@ -211,17 +218,20 @@ public class Bridge {
         catch (Throwable t) { return false; }
     }
 
+    /** Returns the number this listen is stamped with; the page matches results against it. */
     @JavascriptInterface
-    public void startListening(final String langTag) {
+    public synchronized int startListening(final String langTag) {
+        final int seq = ++asrSeq;
         ui.post(() -> {
             releaseAsr();
             // once a language is known to have no on-device model, stop splitting her
             // speaking window between a doomed offline attempt and the retry
             final boolean tryOffline = offlineWorthTrying(langTag);
             long wait = micBusyFor();
-            if (wait > 0) ui.postDelayed(() -> begin(langTag, tryOffline), wait);
-            else begin(langTag, tryOffline);
+            if (wait > 0) ui.postDelayed(() -> begin(langTag, tryOffline, seq), wait);
+            else begin(langTag, tryOffline, seq);
         });
+        return seq;
     }
 
     /* EXTRA_PREFER_OFFLINE used to be set unconditionally, to keep her bedtime session
@@ -229,14 +239,16 @@ public class Bridge {
        does not degrade to the online recogniser — it fails outright. So: ask for
        offline first, and if the answer is one of the "no on-device model" failures,
        come back once over the network rather than reporting silence. */
-    private void begin(final String langTag, final boolean preferOffline) {
+    private void begin(final String langTag, final boolean preferOffline, final int seq) {
         if (!asrAvailable()) {
-            toJs("window.__asrError && window.__asrError(\"unavailable\"," + preferOffline + ")");
+            toJs("window.__asrError && window.__asrError(\"unavailable\"," + preferOffline
+                 + ",false,false," + seq + ")");
             return;
         }
         asrLang = langTag;
         asrOffline = preferOffline;
         asrOpened = false;
+        asrCur = seq;
         try {
             asr = SpeechRecognizer.createSpeechRecognizer(act);
             asr.setRecognitionListener(new RecognitionListener() {
@@ -268,10 +280,11 @@ public class Bridge {
                         // tell the page, so the panel does not sit on "listening" waiting
                         // for an attempt that is never coming
                         toJs("window.__asrError && window.__asrError(" + q(errName(e)) + ","
-                             + wasOffline + "," + hadMic + "," + retrying + ")");
+                             + wasOffline + "," + hadMic + "," + retrying + "," + seq + ")");
                         if (retrying) {
                             markOfflineDead(lang);
-                            ui.postDelayed(() -> begin(lang, false), SETTLE_MS);
+                            // the retry is the same logical listen, so it keeps the number
+                            ui.postDelayed(() -> begin(lang, false, seq), SETTLE_MS);
                         }
                     });
                 }
@@ -285,7 +298,8 @@ public class Bridge {
                     cancelWatchdog();          // it is alive and talking to us
                     StringBuilder all = new StringBuilder();
                     for (String s : got) all.append(' ').append(s);
-                    toJs("window.__asrHeard && window.__asrHeard(" + q(all.toString()) + ")");
+                    toJs("window.__asrHeard && window.__asrHeard(" + q(all.toString())
+                         + "," + seq + ")");
                 }
             });
 
@@ -305,14 +319,14 @@ public class Bridge {
                 if (asr == null) return;
                 releaseAsr();
                 toJs("window.__asrError && window.__asrError(\"no-response\","
-                     + preferOffline + ",true,false)");
+                     + preferOffline + ",true,false," + seq + ")");
             };
             ui.postDelayed(asrWatchdog, ASR_MAX_MS);
         } catch (Throwable t) {
             asrListening = false;
             releaseAsr();
             toJs("window.__asrError && window.__asrError(" + q("start-threw-" + t.getClass().getSimpleName())
-                 + "," + preferOffline + ")");
+                 + "," + preferOffline + ",false,false," + seq + ")");
         }
     }
 
@@ -353,6 +367,7 @@ public class Bridge {
         asrListening = false;
         asrLang = null;
         asrOffline = false;
+        asrCur = -1;
         if (had) micFreeAt = System.currentTimeMillis() + SETTLE_MS;
     }
 

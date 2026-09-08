@@ -262,12 +262,17 @@ let ttsSeq = 0; const ttsWaiting = {};
 window.__ttsDone = (id, ok)=>{ const f=ttsWaiting[id]; if(f){ delete ttsWaiting[id]; f(!!ok); } };
 window.__ttsReady = ()=>{ if(NB){ try{ NCAP=JSON.parse(NB.capabilities()); }catch(e){} } };
 window.__micGranted = ()=>{};
-let asrHit = null, asrErr = null, asrOpen = null;
-window.__asrHeard = txt=>{ if(asrHit) asrHit(txt); };
+let asrHit = null, asrErr = null, asrOpen = null, asrWant = -1;
+/* Results are stamped with the listen that produced them. A recogniser being torn down can
+   still push one, and there is only ever one callback slot, so without this an old card's
+   transcript gets judged against the word now on screen — and advances it for something she
+   never said. */
+window.__asrHeard = (txt, seq)=>{ if(seq===asrWant && asrHit) asrHit(txt); };
 /* A failing recogniser used to look exactly like a quiet room. It now reports the
    failure by name, and whether that attempt was the offline-first one or the network
    retry. Parent panel only — she never sees any of this. */
-window.__asrError = (name, wasOffline, hadMic, retrying)=>{
+window.__asrError = (name, wasOffline, hadMic, retrying, seq)=>{
+  if(seq!==undefined && seq!==asrWant) return;
   const info = { name:String(name||"?"), offline:!!wasOffline, mic:!!hadMic, retry:!!retrying };
   try{
     DIAG.asrLog.push((info.offline?"offline":"online")+":"+info.name+(info.mic?"":"/no-mic"));
@@ -471,24 +476,45 @@ function heard(t,e){
   }
   return false;
 }
+/* The card does not advance until it hears her, so a recogniser that stops listening —
+   it timed out, the device was busy, it gave up — cannot just be left dead. She is still
+   standing in front of the picture. Put it back, up to a point. */
 function listen(e,hit){
+  const stillHers=()=>!ended && !busy && queue[idx]===e;
   if(NB){
     if(!NCAP||!NCAP.asr) return false;
-    asrHit = txt=>{ if(heard(txt,e)) hit(); };
-    try{ NB.startListening(LANGS[e.lang].code); return true; }catch(_){ asrHit=null; return false; }
+    let tries=0;
+    const arm=()=>{
+      asrHit = txt=>{ if(heard(txt,e)) hit(); };
+      asrErr = ()=>{
+        if(!stillHers() || ++tries>6){ $("ear").classList.remove("on"); return; }
+        setTimeout(()=>{ if(stillHers()) arm(); }, 250);
+      };
+      try{ asrWant = NB.startListening(LANGS[e.lang].code); }
+      catch(_){ asrHit=null; asrErr=null; asrWant=-1; }
+    };
+    arm();
+    return true;
   }
   if(!SR) return false;
-  try{
+  const start=()=>{
     rec=new SR(); rec.lang=LANGS[e.lang].code;
     rec.interimResults=true; rec.continuous=true; rec.maxAlternatives=5;
-    rec.onresult=ev=>{let all="";for(let i=0;i<ev.results.length;i++)for(let k=0;k<ev.results[i].length;k++)all+=" "+ev.results[i][k].transcript;
-      if(heard(all,e)) hit();};
-    rec.onerror=()=>{}; rec.onend=()=>{};
-    rec.start(); return true;
-  }catch(_){return false}
+    const mine=rec;
+    rec.onresult=ev=>{
+      if(rec!==mine) return;                       // a superseded recogniser, still talking
+      let all="";
+      for(let i=0;i<ev.results.length;i++)for(let k=0;k<ev.results[i].length;k++)all+=" "+ev.results[i][k].transcript;
+      if(heard(all,e)) hit();
+    };
+    rec.onerror=()=>{};
+    rec.onend=()=>{ if(rec===mine && stillHers()) { try{ start(); }catch(_){ } } };
+    rec.start();
+  };
+  try{ start(); return true; }catch(_){ return false; }
 }
 const unlisten=()=>{
-  if(NB){ asrHit=null; asrErr=null; asrOpen=null; try{ NB.stopListening(); }catch(e){} return; }
+  if(NB){ asrHit=null; asrErr=null; asrOpen=null; asrWant=-1; try{ NB.stopListening(); }catch(e){} return; }
   try{if(rec)rec.stop()}catch(e){}
 };
 
@@ -774,7 +800,8 @@ function listenRaw(e,onText){
   if(NB){
     if(!NCAP||!NCAP.asr) return false;
     asrHit=txt=>onText(txt);
-    try{ NB.startListening(LANGS[e.lang].code); return true; }catch(_){ asrHit=null; return false; }
+    try{ asrWant = NB.startListening(LANGS[e.lang].code); return true; }
+    catch(_){ asrHit=null; asrWant=-1; return false; }
   }
   if(!SR) return false;
   try{
