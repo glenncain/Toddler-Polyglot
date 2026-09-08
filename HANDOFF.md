@@ -26,6 +26,7 @@ Hard constraints from the original brief, none of them negotiable:
     app/src/main/java/.../Bridge.java   native TTS, SpeechRecognizer, key-value store
     .github/workflows/build-apk.yml     builds the APK on GitHub Actions
     tools/matcher-check.mjs             pins the speech matcher, loose parts included
+    tools/session-check.mjs             pins her card flow against the two faults below
 
 `index.html` is byte-identical to the standalone browser build. It detects
 `window.AndroidBridge` at runtime and falls back to web APIs when absent. **Keep it that
@@ -87,6 +88,31 @@ returned as katakana and were left alone.
 the brief insists on — "tutu" for *kutsu* is a test case, so nobody can tighten the matcher
 to make something else pass without the run going red. `node tools/matcher-check.mjs` from
 the repo root; needs playwright.
+
+## Two faults found in real use
+
+Both reported from an actual session, not from the panel, and both fixed. They are the
+kind that only show up when someone is using it properly, so `tools/session-check.mjs`
+pins them.
+
+**Cards advanced on their own.** The page keeps exactly one callback slot for a recognised
+transcript. A recogniser being torn down can still push a result, so the previous card's
+transcript arrived after the next card was on screen and was judged against the *new*
+word — by a matcher that is deliberately forgiving, so it often passed. She got credit for
+a word she never said, and the card moved on without her.
+
+Every listen is now stamped with a number by the bridge, and the page ignores any result
+not carrying the number it asked for.
+
+**The microphone went dead in the middle of a card.** Nothing in her session handled a
+recogniser that stopped listening after starting — it timed out, the device was busy, it
+gave up — and the eight-second watchdog added earlier in this handoff made it worse by
+releasing the recogniser at eight seconds while the card waits nineteen. So between those
+two, the ear was lit and nothing was listening.
+
+The card is meant not to advance until it hears her, so a dead recogniser is now put back
+while the same card is still on screen, up to six times, and the ear goes out if it truly
+cannot listen rather than lying about it.
 
 ## What has not been tested
 
