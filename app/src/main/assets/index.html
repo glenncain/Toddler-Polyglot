@@ -543,13 +543,14 @@ const unlisten=()=>{
 
 /* ══ 6. eleven minutes ══ */
 let queue=[],idx=0,log=[],t0=0,cardT0=0,prompts=0,ended=true,busy=false,tapped=false,tmr=[];
+let paused=false,pausedAt=0;
 const clearT=()=>{tmr.forEach(clearTimeout);tmr=[]};
 const later=(f,ms)=>tmr.push(setTimeout(f,ms));
 function toast(m){const t=$("toast");t.textContent=m;t.classList.add("up");setTimeout(()=>t.classList.remove("up"),1900)}
 
 function startSession(){
   queue=buildQueue(); if(!queue.length){toast("pick a language");return;}
-  idx=0; log=[]; t0=Date.now(); ended=false;
+  idx=0; log=[]; t0=Date.now(); ended=false; paused=false;
   $("parent").classList.remove("on");
   $("moon").classList.remove("on");
   $("hands").style.display="flex";
@@ -632,7 +633,7 @@ parentOnly($("skip"),()=>advance(false));
 /* Android stops the recogniser when the app goes to the background, and nothing used to
    start it again — she came back to a lit ear with nothing behind it. */
 document.addEventListener("visibilitychange",()=>{
-  if(document.visibilityState!=="visible"||ended||busy||!tapped) return;
+  if(document.visibilityState!=="visible"||ended||paused||busy||!tapped) return;
   const e=queue[idx];
   if(e&&cardHit) openEar(e);
 });
@@ -654,7 +655,7 @@ function chime(){
 
 /* ══ 7. the end, said without a word ══ */
 function finish(){
-  if(ended) return; ended=true;
+  if(ended) return; ended=true; paused=false;
   clearT(); unlisten(); cardHit=null; stopClip();
   try{speechSynthesis.cancel()}catch(e){}
   if(NB){ try{ NB.shutUp(); }catch(e){} }
@@ -677,14 +678,44 @@ function finish(){
 }
 
 /* ══ 8. their screen ══ */
-function openParent(){ paintParent(); $("parent").classList.add("on"); }
+/* Her session has to stop while this is open. The panel is only an overlay, so without
+   this the card behind it keeps its timers, keeps speaking the word out loud, and keeps
+   the microphone open — listening to the two of you talk over the top of it, and marking
+   words said that neither of you said to it. It also fights the panel's own microphone
+   tests for the device. */
+function pauseSession(){
+  if(ended||paused) return;
+  paused=true; pausedAt=Date.now();
+  clearT(); unlisten(); stopClip(); cardHit=null;
+  $("ear").classList.remove("on");
+  try{ speechSynthesis.cancel(); }catch(e){}
+  if(NB){ try{ NB.shutUp(); }catch(e){} }
+}
+function resumeSession(){
+  if(ended||!paused) return;
+  paused=false;
+  const away=Date.now()-pausedAt;
+  t0+=away; cardT0+=away;              // time spent in here is not part of her eleven minutes
+  const e=queue[idx];
+  if(!e) return;
+  if(!tapped){                          // she never got to this card; wait for her again
+    later(()=>{ if(!tapped&&!ended&&queue[idx]===e) heard0(e); },9000);
+    return;
+  }
+  cardHit=()=>advance(true,true);
+  openEar(e);
+  later(()=>{ if(!busy&&queue[idx]===e){prompts++; replay(e,1);} },7000);
+  later(()=>{ if(!busy&&queue[idx]===e) advance(false); },19000);
+}
+function openParent(){ pauseSession(); paintParent(); $("parent").classList.add("on"); }
+function closeParent(){ $("parent").classList.remove("on"); resumeSession(); }
 let holdT=null;
 $("gate").addEventListener("pointerdown",()=>{holdT=setTimeout(openParent,1600)});
 ["pointerup","pointerleave","pointercancel"].forEach(ev=>$("gate").addEventListener(ev,()=>clearTimeout(holdT)));
-$("back").onclick=()=>$("parent").classList.remove("on");
+$("back").onclick=closeParent;
 $("begin").onclick=()=>{ if(ac&&ac.state==="suspended")ac.resume(); startSession(); };
 document.addEventListener("keydown",e=>{
-  if(e.key==="p"||e.key==="P"){ $("parent").classList.contains("on")?$("parent").classList.remove("on"):openParent(); }
+  if(e.key==="p"||e.key==="P"){ $("parent").classList.contains("on")?closeParent():openParent(); }
   if($("parent").classList.contains("on")||ended) return;
   if(e.key===" "||e.key==="Enter"){e.preventDefault();advance(true,false)}
   if(e.key==="ArrowRight"){e.preventDefault();advance(false)}

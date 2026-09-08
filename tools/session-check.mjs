@@ -20,7 +20,7 @@ const errs = []; p.on('pageerror', e => errs.push(e.message));
 
 await p.addInitScript(() => {
   const kv = {};
-  window.__mock = { starts: [] };
+  window.__mock = { starts: [], speaks: 0 };
   let seq = 0, live = null;
   window.AndroidBridge = {
     capabilities:()=>JSON.stringify({platform:'android',api:35,device:'T',tts:true,asr:true,
@@ -30,7 +30,8 @@ await p.addInitScript(() => {
     hasVoice:()=>true, asrAvailable:()=>true,
     /* Android speaks with QUEUE_FLUSH: a new utterance drops the one in flight and the
        dropped one never reports back. Anything less faithful hides the stall below. */
-    speak:(t,l,id)=>{ live=id; setTimeout(()=>{ if(live===id) window.__ttsDone&&window.__ttsDone(id,true); },300); },
+    speak:(t,l,id)=>{ window.__mock.speaks++; live=id;
+      setTimeout(()=>{ if(live===id) window.__ttsDone&&window.__ttsDone(id,true); },300); },
     shutUp:()=>{},
     startListening:(lang)=>{ seq++; window.__mock.starts.push({seq,lang}); return seq; },
     stopListening:()=>{},
@@ -114,12 +115,12 @@ const r = await p.evaluate(async () => {
   setCard(shoeEn);
   ended=false; busy=false; tapped=false; cardHit=null;
   $('ear').classList.remove('on');
-  const t0 = Date.now();
+  const tapT0 = Date.now();          // not t0: that is the page's session clock
   heard0(shoeEn);
   await sleep(80);
   $('picture').onclick();
   let waited = 'never';
-  for (let i=0;i<80;i++){ if($('ear').classList.contains('on')){ waited = Date.now()-t0; break; } await sleep(100); }
+  for (let i=0;i<80;i++){ if($('ear').classList.contains('on')){ waited = Date.now()-tapT0; break; } await sleep(100); }
   out.earOpensPromptlyAfterTapWhileSpeaking = typeof waited === 'number' && waited < 2500;
 
   // 5d. an interrupted recording must still settle the promise say() is waiting on
@@ -139,6 +140,28 @@ const r = await p.evaluate(async () => {
   playClip(wav);                                       // something else speaks over it
   await sleep(700);
   out.interruptedClipStillSettles = settled;
+
+  // 5e. the grown-up page must stop her session, not just cover it. Left running behind
+  //      the panel it kept speaking the word aloud and kept the microphone open, listening
+  //      to the room while the parent used the panel's own microphone tests.
+  setCard(shoeEn);
+  ended=false; busy=false; tapped=false; cardHit=null; paused=false;
+  heard0(shoeEn);
+  await sleep(1200);                                  // it has spoken and opened the ear
+  out.earOpenBeforeOpeningPanel = $('ear').classList.contains('on') && asrWant !== -1;
+
+  openParent();
+  const speaksAtPause = window.__mock.speaks;
+  out.panelClosesTheEar   = !$('ear').classList.contains('on') && asrWant === -1;
+  out.panelDisarmsTimers  = tmr.length === 0;
+  const clockAtPause = t0;
+  await sleep(900);
+  out.silentWhilePanelOpen = window.__mock.speaks === speaksAtPause && busy === false;
+
+  closeParent();
+  await sleep(200);
+  out.resumesOnClose     = $('ear').classList.contains('on') && asrWant !== -1 && tmr.length > 0;
+  out.pausedTimeNotHerTime = t0 > clockAtPause;       // the eleven minutes did not run down
 
   // 6. once the card is gone, it stops re-arming
   setCard(shoeEn); unlisten(); listen(shoeEn, ()=>{});

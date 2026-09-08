@@ -143,6 +143,13 @@ recogniser and restarts it afterwards.
 without resolving it, so whatever awaited it waited forever. This one only bites once there
 are parent recordings, which is why it had not shown up yet.
 
+**The grown-up page covered her session without stopping it.** `openParent()` only added a
+CSS class. Behind the panel the card kept its timers, kept speaking the word out loud, and
+kept the microphone open — listening to the two of you talk over the top of it, and
+competing with the panel's own microphone tests for the device. Opening the panel now
+pauses the session and closing it resumes the same card, with the time spent in there
+given back rather than counted against her eleven minutes.
+
 **A second session in one day counted as a second day**, inflating `S.day` and skewing which
 words came back for review. And returning from another app left the card with a lit ear and
 no recogniser, because Android stops it on pause and nothing restarted it.
