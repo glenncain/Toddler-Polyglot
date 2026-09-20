@@ -295,9 +295,9 @@ window.__recDone = async url=>{
 window.__recFail = why=>{ toast("recording failed — "+why); paintRec(); };
 const nativeSpeak = (text,langTag)=>new Promise(res=>{
   const id = ++ttsSeq;
-  ttsWaiting[id]=res;
-  try{ NB.speak(text, langTag, id); }catch(e){ delete ttsWaiting[id]; res(false); }
-  setTimeout(()=>{ if(ttsWaiting[id]){ delete ttsWaiting[id]; res(true); } }, 6000);
+  const watchdog = setTimeout(()=>{ if(ttsWaiting[id]){ delete ttsWaiting[id]; res(true); } }, 6000);
+  ttsWaiting[id]=ok=>{ clearTimeout(watchdog); res(ok); };   // answered, so nothing stays armed
+  try{ NB.speak(text, langTag, id); }catch(e){ delete ttsWaiting[id]; clearTimeout(watchdog); res(false); }
 });
 
 /* ══ 1. the same thirty objects, in all four ══ */
@@ -428,6 +428,16 @@ function playClip(url){
       audioEl.play().catch(()=>res(false));
     }catch(e){res(false)}
   });
+}
+/* speechSynthesis.cancel() is a no-op on Android, where the voice belongs to the
+   platform and not to the page. Stopping her requires both. */
+function hush(){
+  if(NB){
+    try{ NB.shutUp(); }catch(e){}
+    for(const id of Object.keys(ttsWaiting)){ const f=ttsWaiting[id]; delete ttsWaiting[id]; f(false); }
+    return;
+  }
+  try{ speechSynthesis.cancel() }catch(e){}
 }
 function synth(e){
   if(NB) return nativeSpeak(e.say, LANGS[e.lang].code);
@@ -570,11 +580,19 @@ function chime(){
 }
 
 /* ══ 7. the end, said without a word ══ */
-function finish(){
-  if(ended) return; ended=true;
-  clearT(); unlisten(); try{speechSynthesis.cancel()}catch(e){}
+/* Everything her session is holding, let go of: the voice, the microphone, and every
+   timer armed to act on a card. Any way out of the session goes through here — a panel
+   that only slides over the top leaves the tablet listening to the room. */
+function endSession(){
+  ended=true;
+  clearT(); unlisten(); hush();
   $("ear").classList.remove("on"); $("picture").classList.remove("invite");
   $("hands").style.display="none";
+}
+
+function finish(){
+  if(ended) return;
+  endSession();
   document.documentElement.style.setProperty("--stage","var(--night)");
   document.documentElement.style.setProperty("--on","#EBE7F1");
   $("picture").textContent="";
@@ -590,7 +608,7 @@ function finish(){
 }
 
 /* ══ 8. their screen ══ */
-function openParent(){ paintParent(); $("parent").classList.add("on"); }
+function openParent(){ endSession(); paintParent(); $("parent").classList.add("on"); }
 let holdT=null;
 $("gate").addEventListener("pointerdown",()=>{holdT=setTimeout(openParent,1600)});
 ["pointerup","pointerleave","pointercancel"].forEach(ev=>$("gate").addEventListener(ev,()=>clearTimeout(holdT)));

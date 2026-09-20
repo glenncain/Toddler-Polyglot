@@ -84,6 +84,32 @@ rather than the code.
 marked. If you later download the Japanese or Mandarin offline speech pack, clear the app's
 storage (or the `em:asr-offline:` keys) so it tries offline again.
 
+## Leaving her session: fixed, and now tested
+
+`openParent()` used to be `paintParent(); $("parent").classList.add("on")` — it slid the
+grown-up panel over the top and stopped nothing. The tablet went on speaking, went on
+listening to the room, and kept the card's timers armed behind a screen nobody was
+watching. Two smaller holes were in the same path: `speechSynthesis.cancel()` does nothing
+on Android, where the voice belongs to `Bridge.shutUp()`, so even the natural end of the
+eleven minutes left the native voice talking; and every native `speak()` armed a six-second
+watchdog that was never cleared once the word had been answered.
+
+Every way out of her session now goes through one `endSession()` — clear the timers, close
+the microphone, `hush()` the voice, put the ear away. `finish()` and `openParent()` both
+call it.
+
+    npm ci && npm test
+
+`test/session-teardown.test.js` loads `index.html` into a DOM, gets her to the middle of a
+card, then leaves the session three ways and reads the same three things the parent panel
+prints by hand: still speaking, still listening, timers still armed. It runs twice — once
+as the browser build and once with a fake `AndroidBridge` — because the Android path is
+where the voice and the microphone actually live. Against the code before the fix, five of
+its six cases fail.
+
+It runs on every push and pull request as the **Session teardown** job in
+`.github/workflows/build-apk.yml`, alongside the APK build.
+
 ## Building
 
 Local (preferred now that there is a real machine):
@@ -117,4 +143,7 @@ was wrong — they were in the root `build.gradle`, which has no dependencies to
 * The speech matcher is deliberately forgiving — roughly 45% Levenshtein tolerance plus a
   first-two-characters escape. A two-year-old saying "tutu" for *kutsu* must count. Do not
   tighten it to make tests pass.
-* `index.html` stays a single file that runs in a plain browser with no bridge.
+* `index.html` stays a single file that runs in a plain browser with no bridge — the
+  teardown test loads it exactly as it ships, so a fork into an Android-only copy breaks it.
+* Any path out of her session is a full stop, through `endSession()`. Hiding the child
+  screen with a CSS class is not stopping: the microphone is open until something closes it.
