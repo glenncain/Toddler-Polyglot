@@ -84,31 +84,27 @@ rather than the code.
 marked. If you later download the Japanese or Mandarin offline speech pack, clear the app's
 storage (or the `em:asr-offline:` keys) so it tries offline again.
 
-## Leaving her session: fixed, and now tested
-
-`openParent()` used to be `paintParent(); $("parent").classList.add("on")` — it slid the
-grown-up panel over the top and stopped nothing. The tablet went on speaking, went on
-listening to the room, and kept the card's timers armed behind a screen nobody was
-watching. Two smaller holes were in the same path: `speechSynthesis.cancel()` does nothing
-on Android, where the voice belongs to `Bridge.shutUp()`, so even the natural end of the
-eleven minutes left the native voice talking; and every native `speak()` armed a six-second
-watchdog that was never cleared once the word had been answered.
-
-Every way out of her session now goes through one `endSession()` — clear the timers, close
-the microphone, `hush()` the voice, put the ear away. `finish()` and `openParent()` both
-call it.
+## Tests
 
     npm ci && npm test
 
-`test/session-teardown.test.js` loads `index.html` into a DOM, gets her to the middle of a
-card, then leaves the session three ways and reads the same three things the parent panel
-prints by hand: still speaking, still listening, timers still armed. It runs twice — once
-as the browser build and once with a fake `AndroidBridge` — because the Android path is
-where the voice and the microphone actually live. Against the code before the fix, five of
-its six cases fail.
+`test/session-teardown.test.js` loads `app/src/main/assets/index.html` into a DOM exactly
+as it ships — one file, no build step — gets her to the middle of a card, then leaves the
+session by each of the six ways out and reads the same three things the parent panel
+prints by hand: still speaking, still listening, timers still armed. It also asserts that
+no timer the card armed is still pending. Each path runs twice, once as the browser build
+and once against a fake `AndroidBridge`, because the voice and the microphone live on the
+native side.
 
-It runs on every push and pull request as the **Session teardown** job in
-`.github/workflows/build-apk.yml`, alongside the APK build.
+`test/harness.js` holds the fakes and counts every `setTimeout` the page arms. Take an
+exit path out of `standDown()` and the matching cases fail; nothing else moves.
+
+The **Session teardown** job in `.github/workflows/build-apk.yml` runs it on every push
+and pull request, alongside the APK build.
+
+The APK build itself is on `android-actions/setup-android@v4`. v3 targets Node 20 and does
+not survive the Node 24 runner migration, so it fails at *Set up Android SDK* in about
+fourteen seconds.
 
 ## Building
 
@@ -145,5 +141,8 @@ was wrong — they were in the root `build.gradle`, which has no dependencies to
   tighten it to make tests pass.
 * `index.html` stays a single file that runs in a plain browser with no bridge — the
   teardown test loads it exactly as it ships, so a fork into an Android-only copy breaks it.
-* Any path out of her session is a full stop, through `endSession()`. Hiding the child
-  screen with a CSS class is not stopping: the microphone is open until something closes it.
+* A new way out of her session gets a row in `EXITS` in `test/session-teardown.test.js`.
+* Every way out of her session goes through `standDown()`. Adding a new exit — a route, a
+  gesture, a lifecycle callback — means calling it, not hiding her screen. A CSS class
+  stops nothing: the voice keeps talking, the recogniser keeps the microphone, and the
+  card's timers keep firing behind whatever is now in front of her.

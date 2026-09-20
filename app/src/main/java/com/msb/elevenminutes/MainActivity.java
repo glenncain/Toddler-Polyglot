@@ -186,9 +186,18 @@ public class MainActivity extends AppCompatActivity {
         if (has) immersive();
     }
 
+    /* Backgrounding is one of the ways her session ends, so it is a full stop, not a
+       pause. Stopping speech and the recogniser here is not enough on its own: the page
+       still has the card's timers armed and will re-open the microphone behind whatever
+       app is now in the foreground, so the page is told to stand down as well. */
     @Override protected void onPause() {
         super.onPause();
-        if (bridge != null) { bridge.shutUp(); bridge.stopListening(); }
+        if (bridge != null) {
+            bridge.shutUp();
+            bridge.stopListening();
+            bridge.abandonCapture();        // the level meter and any half-recorded word
+        }
+        if (web != null) web.evaluateJavascript("window.__standDown && window.__standDown()", null);
     }
 
     @Override protected void onDestroy() {

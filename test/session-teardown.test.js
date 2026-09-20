@@ -3,9 +3,9 @@
 /* Leaving her session must be a full stop, not a screen that covers it.
    The bug this locks out: the grown-up panel slid over the top while the tablet
    went on speaking, went on listening to the room, and kept two timers armed to
-   advance a card nobody could see.
+   advance a card nobody could see. The same hole was on every other way out.
 
-   These are the same three readings the parent panel prints by hand after the fix:
+   These are the same three readings the parent panel prints by hand:
    ear on, timers armed, still listening. */
 
 const test = require('node:test');
@@ -15,6 +15,44 @@ const { openApp, intoTheMiddleOfACard } = require('./harness');
 const BUILDS = [
   { name: 'browser build', bridge: false },
   { name: 'Android build', bridge: true },
+];
+
+/* Every way her session can end, and how to take it. */
+const EXITS = [
+  {
+    name: 'the grown-up panel, held open at the corner',
+    leave: (app) => app.$('gate').dispatchEvent(new app.win.Event('pointerdown')),
+    /* the hold is 1.6 seconds before the panel comes up */
+    settled: (app) => app.$('parent').classList.contains('on'),
+    settledIs: 'the grown-up panel to open',
+  },
+  {
+    name: 'the keyboard shortcut to the panel',
+    leave: (app) => app.win.document.dispatchEvent(new app.win.KeyboardEvent('keydown', { key: 'p' })),
+    settled: (app) => app.$('parent').classList.contains('on'),
+    settledIs: 'the grown-up panel to open',
+  },
+  {
+    name: 'another app taking the foreground',
+    leave: (app) => {
+      Object.defineProperty(app.win.document, 'hidden', { get: () => true, configurable: true });
+      app.win.document.dispatchEvent(new app.win.Event('visibilitychange'));
+    },
+  },
+  {
+    name: 'the window losing focus',
+    leave: (app) => app.win.dispatchEvent(new app.win.Event('blur')),
+  },
+  {
+    name: 'the tab or the app going away',
+    leave: (app) => app.win.dispatchEvent(new app.win.Event('pagehide')),
+  },
+  {
+    name: 'the eleven minutes running out',
+    leave: (app) => app.win.finish(),
+    settled: (app) => app.$('moon').classList.contains('on'),
+    settledIs: 'the moon to come up',
+  },
 ];
 
 function report(label, s) {
@@ -42,47 +80,22 @@ function assertReleased(before, after) {
 }
 
 for (const build of BUILDS) {
-  test(build.name + ': the grown-up panel stops her session', async (t) => {
-    const app = await openApp({ bridge: build.bridge });
-    t.after(() => app.close());
+  for (const exit of EXITS) {
+    test(build.name + ': ' + exit.name + ' stops her session', async (t) => {
+      const app = await openApp({ bridge: build.bridge });
+      t.after(() => app.close());
 
-    const before = await intoTheMiddleOfACard(app);
-    assert.ok(before.speaking && before.listening && before.earOn && before.armed.length >= 2,
-      'the card should be live before the panel opens, but it reads:\n' + report('', before));
+      const before = await intoTheMiddleOfACard(app);
+      assert.ok(before.speaking && before.listening && before.earOn && before.armed.length >= 2,
+        'the card should be live before she leaves, but it reads:\n' + report('', before));
 
-    /* the real way in: press and hold the top-left corner for 1.6 seconds */
-    app.$('gate').dispatchEvent(new app.win.Event('pointerdown'));
-    await app.waitFor(() => app.$('parent').classList.contains('on'), 'the grown-up panel to open');
+      exit.leave(app);
+      if (exit.settled) await app.waitFor(() => exit.settled(app), exit.settledIs);
 
-    const after = app.snapshot();
-    t.diagnostic('\n' + report('before opening the panel:', before) + '\n' + report('after opening the panel:', after));
-    assertReleased(before, after);
-    assert.deepStrictEqual(app.problems, [], 'the page threw while the panel was opening');
-  });
-
-  test(build.name + ': the keyboard shortcut to the panel stops her session too', async (t) => {
-    const app = await openApp({ bridge: build.bridge });
-    t.after(() => app.close());
-
-    const before = await intoTheMiddleOfACard(app);
-    app.win.document.dispatchEvent(new app.win.KeyboardEvent('keydown', { key: 'p' }));
-    await app.waitFor(() => app.$('parent').classList.contains('on'), 'the grown-up panel to open');
-
-    const after = app.snapshot();
-    t.diagnostic('\n' + report('before:', before) + '\n' + report('after:', after));
-    assertReleased(before, after);
-  });
-
-  test(build.name + ': the end of the eleven minutes stops her session', async (t) => {
-    const app = await openApp({ bridge: build.bridge });
-    t.after(() => app.close());
-
-    const before = await intoTheMiddleOfACard(app);
-    app.win.finish();                              // the moon, the end of the day
-    await app.waitFor(() => app.$('moon').classList.contains('on'), 'the moon to come up');
-
-    const after = app.snapshot();
-    t.diagnostic('\n' + report('before:', before) + '\n' + report('after:', after));
-    assertReleased(before, after);
-  });
+      const after = app.snapshot();
+      t.diagnostic('\n' + report('before:', before) + '\n' + report('after:', after));
+      assertReleased(before, after);
+      assert.deepStrictEqual(app.problems, [], 'the page threw on the way out');
+    });
+  }
 }

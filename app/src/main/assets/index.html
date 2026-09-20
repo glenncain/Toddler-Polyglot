@@ -258,8 +258,10 @@ const NB = window.AndroidBridge || null;
 let NCAP = null;
 if(NB){ try{ NCAP = JSON.parse(NB.capabilities()); }catch(e){ NCAP=null; } }
 
-let ttsSeq = 0; const ttsWaiting = {};
-window.__ttsDone = (id, ok)=>{ const f=ttsWaiting[id]; if(f){ delete ttsWaiting[id]; f(!!ok); } };
+let ttsSeq = 0; const ttsWaiting = {};          // id -> {res, t}: the waiter and its fallback timer
+const ttsSettle = (id, ok)=>{ const w=ttsWaiting[id]; if(!w) return; delete ttsWaiting[id]; clearTimeout(w.t); w.res(ok); };
+const ttsAbandon = ()=>{ for(const id of Object.keys(ttsWaiting)) ttsSettle(id, false); };
+window.__ttsDone = (id, ok)=>ttsSettle(id, !!ok);
 window.__ttsReady = ()=>{ if(NB){ try{ NCAP=JSON.parse(NB.capabilities()); }catch(e){} } };
 window.__micGranted = ()=>{};
 let asrHit = null, asrErr = null, asrOpen = null;
@@ -295,9 +297,8 @@ window.__recDone = async url=>{
 window.__recFail = why=>{ toast("recording failed — "+why); paintRec(); };
 const nativeSpeak = (text,langTag)=>new Promise(res=>{
   const id = ++ttsSeq;
-  const watchdog = setTimeout(()=>{ if(ttsWaiting[id]){ delete ttsWaiting[id]; res(true); } }, 6000);
-  ttsWaiting[id]=ok=>{ clearTimeout(watchdog); res(ok); };   // answered, so nothing stays armed
-  try{ NB.speak(text, langTag, id); }catch(e){ delete ttsWaiting[id]; clearTimeout(watchdog); res(false); }
+  ttsWaiting[id] = { res, t: setTimeout(()=>ttsSettle(id, true), 6000) };
+  try{ NB.speak(text, langTag, id); }catch(e){ ttsSettle(id, false); }
 });
 
 /* ══ 1. the same thirty objects, in all four ══ */
@@ -425,19 +426,10 @@ function playClip(url){
       if(audioEl){audioEl.pause();}
       audioEl=new Audio(url);
       audioEl.onended=()=>res(true); audioEl.onerror=()=>res(false);
+      audioEl.onpause=()=>res(false);        // hush() stops it mid-word; say() must not hang
       audioEl.play().catch(()=>res(false));
     }catch(e){res(false)}
   });
-}
-/* speechSynthesis.cancel() is a no-op on Android, where the voice belongs to the
-   platform and not to the page. Stopping her requires both. */
-function hush(){
-  if(NB){
-    try{ NB.shutUp(); }catch(e){}
-    for(const id of Object.keys(ttsWaiting)){ const f=ttsWaiting[id]; delete ttsWaiting[id]; f(false); }
-    return;
-  }
-  try{ speechSynthesis.cancel() }catch(e){}
 }
 function synth(e){
   if(NB) return nativeSpeak(e.say, LANGS[e.lang].code);
@@ -503,13 +495,14 @@ const unlisten=()=>{
 
 /* ══ 6. eleven minutes ══ */
 let queue=[],idx=0,log=[],t0=0,cardT0=0,prompts=0,ended=true,busy=false,tapped=false,tmr=[];
+let stood=false;                          // a live session was stopped by an exit, not by finishing
 const clearT=()=>{tmr.forEach(clearTimeout);tmr=[]};
 const later=(f,ms)=>tmr.push(setTimeout(f,ms));
 function toast(m){const t=$("toast");t.textContent=m;t.classList.add("up");setTimeout(()=>t.classList.remove("up"),1900)}
 
 function startSession(){
   queue=buildQueue(); if(!queue.length){toast("pick a language");return;}
-  idx=0; log=[]; t0=Date.now(); ended=false;
+  idx=0; log=[]; t0=Date.now(); ended=false; stood=false;
   $("parent").classList.remove("on");
   $("moon").classList.remove("on");
   $("hands").style.display="flex";
@@ -579,20 +572,49 @@ function chime(){
   }catch(e){}
 }
 
+/* ══ 6b. leaving her session ══
+   Her session is three things running at once: something speaking, the microphone
+   open, and the card's timers armed. Hiding her screen stops none of them, so every
+   way out — the grown-up panel, the tab going to the background, the window losing
+   focus, the app closing — goes through standDown() rather than through a CSS class.
+   The privacy bar is the microphone: it is never open when she is not the one being
+   listened to. */
+function hush(){                              // whatever is talking, on either path
+  if(NB){ try{ NB.shutUp(); }catch(e){} }
+  ttsAbandon();                               // and the fallback timer each speak() armed
+  try{ speechSynthesis.cancel(); }catch(e){}
+  try{ if(audioEl) audioEl.pause(); }catch(e){}
+}
+function releaseMic(){                        // everything that can hold the microphone
+  unlisten();                                 // the recogniser
+  try{ stopRec(); }catch(e){}                 // a parent's recording, if one is running
+  if(NB){ try{ NB.levelStop(); }catch(e){} }  // the level meter on the device check
+}
+function standDown(){
+  if(!ended) stood=true;                      // remember there was a card to come back to
+  ended=true;                                 // nothing armed can start another card
+  clearT(); releaseMic(); hush();
+  busy=false; tapped=false;
+  $("ear").classList.remove("on");
+  $("picture").classList.remove("invite");
+  saveState();                                // the cards she did already are hers, kept
+}
+/* Coming back from a stand-down restarts the card she was on, from the top: the same
+   word, the same invitation, the same timers. She is never left in front of a picture
+   that no longer does anything. */
+function resume(){
+  if(!stood || $("parent").classList.contains("on")) return;
+  stood=false; ended=false;
+  card();
+}
+window.__standDown = standDown;               // the Android host calls this from onPause()
+
 /* ══ 7. the end, said without a word ══ */
-/* Everything her session is holding, let go of: the voice, the microphone, and every
-   timer armed to act on a card. Any way out of the session goes through here — a panel
-   that only slides over the top leaves the tablet listening to the room. */
-function endSession(){
-  ended=true;
-  clearT(); unlisten(); hush();
+function finish(){
+  if(ended) return; ended=true; stood=false;
+  clearT(); releaseMic(); hush();
   $("ear").classList.remove("on"); $("picture").classList.remove("invite");
   $("hands").style.display="none";
-}
-
-function finish(){
-  if(ended) return;
-  endSession();
   document.documentElement.style.setProperty("--stage","var(--night)");
   document.documentElement.style.setProperty("--on","#EBE7F1");
   $("picture").textContent="";
@@ -608,14 +630,23 @@ function finish(){
 }
 
 /* ══ 8. their screen ══ */
-function openParent(){ endSession(); paintParent(); $("parent").classList.add("on"); }
+function openParent(){ standDown(); paintParent(); $("parent").classList.add("on"); }
+function closeParent(){ $("parent").classList.remove("on"); resume(); }
 let holdT=null;
 $("gate").addEventListener("pointerdown",()=>{holdT=setTimeout(openParent,1600)});
 ["pointerup","pointerleave","pointercancel"].forEach(ev=>$("gate").addEventListener(ev,()=>clearTimeout(holdT)));
-$("back").onclick=()=>$("parent").classList.remove("on");
+$("back").onclick=closeParent;
 $("begin").onclick=()=>{ if(ac&&ac.state==="suspended")ac.resume(); startSession(); };
+
+/* The other ways out. None of them is a click on anything, and none of them used to
+   stop her session — it carried on talking and listening behind whatever replaced it. */
+document.addEventListener("visibilitychange",()=>{ document.hidden ? standDown() : resume(); });
+window.addEventListener("pagehide",standDown);       // the tab or the app going away
+window.addEventListener("blur",standDown);           // another app took the foreground
+window.addEventListener("focus",resume);
+
 document.addEventListener("keydown",e=>{
-  if(e.key==="p"||e.key==="P"){ $("parent").classList.contains("on")?$("parent").classList.remove("on"):openParent(); }
+  if(e.key==="p"||e.key==="P"){ $("parent").classList.contains("on")?closeParent():openParent(); }
   if($("parent").classList.contains("on")||ended) return;
   if(e.key===" "||e.key==="Enter"){e.preventDefault();advance(true,false)}
   if(e.key==="ArrowRight"){e.preventDefault();advance(false)}
