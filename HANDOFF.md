@@ -96,8 +96,12 @@ no timer the card armed is still pending. Each path runs twice, once as the brow
 and once against a fake `AndroidBridge`, because the voice and the microphone live on the
 native side.
 
+It checks the other direction too: pressing *Back to her screen* must give her a live
+card again, not a picture that no longer does anything.
+
 `test/harness.js` holds the fakes and counts every `setTimeout` the page arms. Take an
-exit path out of `standDown()` and the matching cases fail; nothing else moves.
+exit path out of `standDown()` and the matching cases fail; take `resume()` out of
+`closeParent()` and only the coming-back cases fail. Nothing else moves.
 
 The **Session teardown** job in `.github/workflows/build-apk.yml` runs it on every push
 and pull request, alongside the APK build.

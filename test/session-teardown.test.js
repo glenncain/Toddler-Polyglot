@@ -98,4 +98,30 @@ for (const build of BUILDS) {
       assert.deepStrictEqual(app.problems, [], 'the page threw on the way out');
     });
   }
+
+  /* The other direction. A teardown that stops everything and never starts again
+     leaves her in front of a picture that does nothing, which she cannot report and
+     cannot get out of. */
+  test(build.name + ': coming back from the panel gives her a live card again', async (t) => {
+    const app = await openApp({ bridge: build.bridge });
+    t.after(() => app.close());
+
+    await intoTheMiddleOfACard(app);
+    app.win.document.dispatchEvent(new app.win.KeyboardEvent('keydown', { key: 'p' }));
+    await app.waitFor(() => app.$('parent').classList.contains('on'), 'the grown-up panel to open');
+    assert.strictEqual(app.snapshot().listening, false, 'the microphone stayed open behind the panel');
+
+    app.$('back').click();
+    await app.waitFor(() => !app.$('parent').classList.contains('on'), 'the panel to close');
+
+    app.$('picture').click();                      // she taps it, the way she would
+    await app.waitFor(() => app.tts.speaking, 'the word to be spoken again');
+    app.tts.finish();
+    await app.waitFor(() => app.tts.speaking, 'the word to be spoken a second time');
+    app.tts.finish();
+    await app.waitFor(() => app.$('ear').classList.contains('on'), 'the ear to open again');
+
+    assert.ok(app.asr.open, 'she came back to a picture that no longer listens to her');
+    t.diagnostic('\n' + report('after coming back and tapping:', app.snapshot()));
+  });
 }
