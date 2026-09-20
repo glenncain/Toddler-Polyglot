@@ -28,7 +28,7 @@ jobs:
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4    # v3 does not survive the Node 24 runner
+        uses: android-actions/setup-android@v4
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
