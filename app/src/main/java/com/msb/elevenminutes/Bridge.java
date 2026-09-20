@@ -513,6 +513,7 @@ public class Bridge {
     public synchronized void recStop() {
         android.media.MediaRecorder m = rec;
         rec = null;
+        if (m == null && recFile == null) return;   // nothing was recording; nothing to report
         boolean stopped = false;
         if (m != null) {
             try { m.stop(); stopped = true; } catch (Throwable ignored) {}
@@ -694,6 +695,13 @@ public class Bridge {
              + "\"en\":" + hasVoice("en-US") + ",\"es\":" + hasVoice("es-ES")
              + ",\"zh\":" + hasVoice("zh-CN") + ",\"ja\":" + hasVoice("ja-JP")
              + "}}";
+    }
+
+    /* Losing the foreground is not a finished recording. Drop the clip and the meter
+       without reporting a failure the parent did not cause. */
+    public void abandonCapture() {
+        levelStop();
+        recDiscard();
     }
 
     public void release() {
