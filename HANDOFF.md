@@ -84,6 +84,32 @@ rather than the code.
 marked. If you later download the Japanese or Mandarin offline speech pack, clear the app's
 storage (or the `em:asr-offline:` keys) so it tries offline again.
 
+## Tests
+
+    npm ci && npm test
+
+`test/session-teardown.test.js` loads `app/src/main/assets/index.html` into a DOM exactly
+as it ships — one file, no build step — gets her to the middle of a card, then leaves the
+session by each of the six ways out and reads the same three things the parent panel
+prints by hand: still speaking, still listening, timers still armed. It also asserts that
+no timer the card armed is still pending. Each path runs twice, once as the browser build
+and once against a fake `AndroidBridge`, because the voice and the microphone live on the
+native side.
+
+It checks the other direction too: pressing *Back to her screen* must give her a live
+card again, not a picture that no longer does anything.
+
+`test/harness.js` holds the fakes and counts every `setTimeout` the page arms. Take an
+exit path out of `standDown()` and the matching cases fail; take `resume()` out of
+`closeParent()` and only the coming-back cases fail. Nothing else moves.
+
+The **Session teardown** job in `.github/workflows/build-apk.yml` runs it on every push
+and pull request, alongside the APK build.
+
+The APK build itself is on `android-actions/setup-android@v4`. v3 targets Node 20 and does
+not survive the Node 24 runner migration, so it fails at *Set up Android SDK* in about
+fourteen seconds.
+
 ## Building
 
 Local (preferred now that there is a real machine):
@@ -117,7 +143,9 @@ was wrong — they were in the root `build.gradle`, which has no dependencies to
 * The speech matcher is deliberately forgiving — roughly 45% Levenshtein tolerance plus a
   first-two-characters escape. A two-year-old saying "tutu" for *kutsu* must count. Do not
   tighten it to make tests pass.
-* `index.html` stays a single file that runs in a plain browser with no bridge.
+* `index.html` stays a single file that runs in a plain browser with no bridge — the
+  teardown test loads it exactly as it ships, so a fork into an Android-only copy breaks it.
+* A new way out of her session gets a row in `EXITS` in `test/session-teardown.test.js`.
 * Every way out of her session goes through `standDown()`. Adding a new exit — a route, a
   gesture, a lifecycle callback — means calling it, not hiding her screen. A CSS class
   stops nothing: the voice keeps talking, the recogniser keeps the microphone, and the
