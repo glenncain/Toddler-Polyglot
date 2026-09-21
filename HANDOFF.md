@@ -118,3 +118,7 @@ was wrong — they were in the root `build.gradle`, which has no dependencies to
   first-two-characters escape. A two-year-old saying "tutu" for *kutsu* must count. Do not
   tighten it to make tests pass.
 * `index.html` stays a single file that runs in a plain browser with no bridge.
+* Every way out of her session goes through `standDown()`. Adding a new exit — a route, a
+  gesture, a lifecycle callback — means calling it, not hiding her screen. A CSS class
+  stops nothing: the voice keeps talking, the recogniser keeps the microphone, and the
+  card's timers keep firing behind whatever is now in front of her.
