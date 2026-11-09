@@ -79,24 +79,34 @@ function assertReleased(before, after) {
     'timers armed during the card are still pending: ' + after.armedDescribed.join(', '));
 }
 
+/* What a live card is holding at each moment. */
+const MOMENTS = [
+  { name: 'while it listens for her', moment: 'listening',
+    live: (s) => s.listening && s.earOn && !s.speaking && s.armed.length >= 2 },
+  { name: 'while it says the word again', moment: 'speaking',
+    live: (s) => s.speaking && !s.listening && s.armed.length >= 2 },
+];
+
 for (const build of BUILDS) {
   for (const exit of EXITS) {
-    test(build.name + ': ' + exit.name + ' stops her session', async (t) => {
-      const app = await openApp({ bridge: build.bridge });
-      t.after(() => app.close());
+    for (const m of MOMENTS) {
+      test(build.name + ': ' + exit.name + ', ' + m.name + ', stops her session', async (t) => {
+        const app = await openApp({ bridge: build.bridge });
+        t.after(() => app.close());
 
-      const before = await intoTheMiddleOfACard(app);
-      assert.ok(before.speaking && before.listening && before.earOn && before.armed.length >= 2,
-        'the card should be live before she leaves, but it reads:\n' + report('', before));
+        const before = await intoTheMiddleOfACard(app, m.moment);
+        assert.ok(m.live(before),
+          'the card should be live before she leaves, but it reads:\n' + report('', before));
 
-      exit.leave(app);
-      if (exit.settled) await app.waitFor(() => exit.settled(app), exit.settledIs);
+        exit.leave(app);
+        if (exit.settled) await app.waitFor(() => exit.settled(app), exit.settledIs);
 
-      const after = app.snapshot();
-      t.diagnostic('\n' + report('before:', before) + '\n' + report('after:', after));
-      assertReleased(before, after);
-      assert.deepStrictEqual(app.problems, [], 'the page threw on the way out');
-    });
+        const after = app.snapshot();
+        t.diagnostic('\n' + report('before:', before) + '\n' + report('after:', after));
+        assertReleased(before, after);
+        assert.deepStrictEqual(app.problems, [], 'the page threw on the way out');
+      });
+    }
   }
 
   /* The other direction. A teardown that stops everything and never starts again

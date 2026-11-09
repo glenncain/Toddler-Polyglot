@@ -209,7 +209,11 @@ async function openApp({ bridge = false } = {}) {
 
 /* Gets her to the middle of a card: the word is playing again, the ear is open,
    and the two timers that drive the card are armed. */
-async function intoTheMiddleOfACard(app) {
+/* Two moments in the middle of a card, because the app is never speaking and listening
+   at once: the microphone would hear the tablet say the word and credit her for it.
+     'listening' - the word has been said, the ear is open, the card's timers are armed
+     'speaking'  - she tapped again, so the ear has closed and the word is being repeated */
+async function intoTheMiddleOfACard(app, moment = 'listening') {
   app.$('begin').click();
   await waitFor(() => !app.$('parent').classList.contains('on'), 'the session to start');
 
@@ -220,9 +224,10 @@ async function intoTheMiddleOfACard(app) {
   app.tts.finish();
   await waitFor(() => app.$('ear').classList.contains('on'), 'the ear to open');
 
-  app.$('picture').click();                       // she taps again: it says the word while listening
-  await waitFor(() => app.tts.speaking, 'the repeat to start');
-
+  if (moment === 'speaking') {
+    app.$('picture').click();                     // she taps again: the ear shuts and it repeats the word
+    await waitFor(() => app.tts.speaking, 'the repeat to start');
+  }
   return app.snapshot();
 }
 

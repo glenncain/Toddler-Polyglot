@@ -177,12 +177,22 @@ no timer the card armed is still pending. Each path runs twice, once as the brow
 and once against a fake `AndroidBridge`, because the voice and the microphone live on the
 native side.
 
+"The middle of a card" is two moments, because the app is never speaking and listening at
+once (the microphone would hear the tablet say the word and credit her for it): the ear
+open waiting for her, and the word being repeated with the ear shut. Every exit is taken
+from both.
+
 It checks the other direction too: pressing *Back to her screen* must give her a live
 card again, not a picture that no longer does anything.
 
 `test/harness.js` holds the fakes and counts every `setTimeout` the page arms. Take an
 exit path out of `standDown()` and the matching cases fail; take `resume()` out of
 `closeParent()` and only the coming-back cases fail. Nothing else moves.
+
+Two more checks drive the page in a real Chromium through Playwright and are not in CI
+yet: `node tools/session-check.mjs` (cards advancing on their own, the dead microphone,
+the app hearing itself, the bottom-edge brush) and `node tools/matcher-check.mjs` (what
+the forgiving matcher must and must not accept, including Japanese kanji).
 
 The **Session teardown** job in `.github/workflows/build-apk.yml` runs it on every push
 and pull request, alongside the APK build.
