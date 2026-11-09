@@ -14,6 +14,29 @@ on:
         options: [ debug, release ]
 
 jobs:
+  # Leaving her session must release the voice, the microphone and every armed timer.
+  # A grown-up panel that only slides over the top leaves the tablet listening to the
+  # room, and that is a privacy bug you cannot see on the screen.
+  session-teardown:
+    name: Session teardown
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install the test dependencies
+        run: npm ci
+
+      - name: Run the session teardown tests
+        run: npm test
+
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 25

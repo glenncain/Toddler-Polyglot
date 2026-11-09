@@ -25,6 +25,8 @@ Hard constraints from the original brief, none of them negotiable:
     app/src/main/java/.../MainActivity  WebView host, https asset serving, file picker
     app/src/main/java/.../Bridge.java   native TTS, SpeechRecognizer, key-value store
     .github/workflows/build-apk.yml     builds the APK on GitHub Actions
+    tools/matcher-check.mjs             pins the speech matcher, loose parts included
+    tools/session-check.mjs             pins her card flow against the two faults below
 
 `index.html` is byte-identical to the standalone browser build. It detects
 `window.AndroidBridge` at runtime and falls back to web APIs when absent. **Keep it that
@@ -63,26 +65,141 @@ Note for the record: `com.google.android.tts` holds the microphone permission, s
 "recognition service is denied the mic" theory — the last one standing before this run —
 was wrong. It was worth checking and it is now checked; the panel still reports it.
 
-## What is left
+## Japanese: heard correctly, rejected by the word list
 
-**Japanese returns `asr=silent`: the recogniser takes the microphone and then answers with
-neither a result nor an error.** The other three languages work, so this is specific to
-`ja-JP` on this tablet, not a general fault.
+The 2026-09-08 15:45 check closed this one too:
 
-A recogniser that never answers used to hold the microphone for as long as the app lived,
-which for her means a card that never advances and no way back. There is now an
-eight-second watchdog: the attempt is released and reported as `no-response`, so the panel
-says what happened and the microphone comes back. That contains the symptom; it does not
-explain it.
+    Japanese: asr=heard opened=yes heard="靴 普通"  → hears, did not match
 
-To take it further, try Japanese again on the next build. If it still returns nothing,
-`adb logcat | grep -i -E "speech|recogn"` during that tap is the next step — a machine with
-adb was never available during any of this debugging, and it is now the binding constraint
-rather than the code.
+靴 is *kutsu*. The recogniser had it right and the matcher threw it away, because the
+Japanese entries only ever held kana and romaji — `["くつ","kutsu"]` — while ja-JP returns
+**kanji**. Mandarin never hit this only because its data was already hanzi.
 
-**One caveat on the offline memory.** A language marked as having no on-device model stays
-marked. If you later download the Japanese or Mandarin offline speech pack, clear the app's
-storage (or the `em:asr-offline:` keys) so it tries offline again.
+The matcher itself is untouched. Each Japanese word now carries its other spellings in a
+third slot, and `heard()` tries those too:
+
+    ["くつ","kutsu",["靴"]]
+
+Kana and romaji still count, so nothing that worked before stops working. Katakana
+loanwords (コップ, ドア, ボール, ミルク, バナナ, ベッド, スプーン, パン) were already
+returned as katakana and were left alone.
+
+`tools/matcher-check.mjs` pins this, the four device transcripts, and the loose behaviour
+the brief insists on — "tutu" for *kutsu* is a test case, so nobody can tighten the matcher
+to make something else pass without the run going red. `node tools/matcher-check.mjs` from
+the repo root; needs playwright.
+
+## Two faults found in real use
+
+Both reported from an actual session, not from the panel, and both fixed. They are the
+kind that only show up when someone is using it properly, so `tools/session-check.mjs`
+pins them.
+
+**Cards advanced on their own.** The page keeps exactly one callback slot for a recognised
+transcript. A recogniser being torn down can still push a result, so the previous card's
+transcript arrived after the next card was on screen and was judged against the *new*
+word — by a matcher that is deliberately forgiving, so it often passed. She got credit for
+a word she never said, and the card moved on without her.
+
+Every listen is now stamped with a number by the bridge, and the page ignores any result
+not carrying the number it asked for.
+
+**The microphone went dead in the middle of a card.** Nothing in her session handled a
+recogniser that stopped listening after starting — it timed out, the device was busy, it
+gave up — and the eight-second watchdog added earlier in this handoff made it worse by
+releasing the recogniser at eight seconds while the card waits nineteen. So between those
+two, the ear was lit and nothing was listening.
+
+The card is meant not to advance until it hears her, so a dead recogniser is now put back
+while the same card is still on screen, up to six times, and the ear goes out if it truly
+cannot listen rather than lying about it.
+
+## A review pass, and what it turned up
+
+Two passes over the whole thing after the faults above. Five more, in the order they
+matter. `tools/session-check.mjs` pins the first three.
+
+**The bottom edge of her screen advanced the card on any touch.** `#hands` is
+`left:0;right:0;bottom:0` with two `flex:1` buttons 74px tall — so the entire bottom strip
+was ✓ on the left half and → on the right, and a resting palm marked a word said and moved
+her on. These are meant for the parent sitting next to her; they now want a deliberate
+press (`HOLD_MS`, 420ms) rather than a brush. Revert by pointing `parentOnly` back at
+`onclick` if it gets in the way.
+
+**Tapping the picture while the app was speaking shut the microphone for six seconds.**
+Android speaks with `QUEUE_FLUSH`, so a second utterance drops the one in flight and the
+dropped one never reports done. `say()` then sat on its six-second timeout, and `heard0`
+stopped one line before opening the ear. Measured against the previous build: 6813ms to
+open the ear, against 1083ms now. This is the "it sometimes does not turn on the mic right
+after pressing the picture" from real use.
+
+**The app could hear itself and give her the tick for it.** The seven-second repeat and
+the tap-to-replay both spoke the word while the recogniser was listening. The microphone
+picked up the tablet, the matcher agreed the word had been said, and the card advanced —
+marking a word learned that she had never once said aloud. Speaking now stops the
+recogniser and restarts it afterwards.
+
+**An interrupted recording never settled its promise.** `playClip` paused the previous clip
+without resolving it, so whatever awaited it waited forever. This one only bites once there
+are parent recordings, which is why it had not shown up yet.
+
+**A second session in one day counted as a second day**, inflating `S.day` and skewing which
+words came back for review. And returning from another app left the card with a lit ear and
+no recogniser, because Android stops it on pause and nothing restarted it.
+
+## What has not been tested
+
+Everything above was measured on the tablet, by an adult, through the parent panel. **None
+of it has been in front of the child**, and the parent voice recordings have never been
+exercised beyond a round-trip against a mock bridge. That is the next real test, and it is
+not one this document can do anything about.
+
+Two known loose ends:
+
+* **The offline memory is sticky.** A language marked as having no on-device model stays
+  marked, across launches, by design. If you later install the Japanese or Mandarin offline
+  speech pack, clear the app's storage (or the `em:asr-offline:` keys) so it tries offline
+  again.
+* **The recogniser can still answer with nothing at all.** An eight-second watchdog
+  releases it and reports `no-response`, so a card cannot wedge, but if that starts showing
+  up often, `adb logcat | grep -i -E "speech|recogn"` during the tap is the way in. A
+  machine with adb was never available during any of this debugging.
+
+## Tests
+
+    npm ci && npm test
+
+`test/session-teardown.test.js` loads `app/src/main/assets/index.html` into a DOM exactly
+as it ships — one file, no build step — gets her to the middle of a card, then leaves the
+session by each of the six ways out and reads the same three things the parent panel
+prints by hand: still speaking, still listening, timers still armed. It also asserts that
+no timer the card armed is still pending. Each path runs twice, once as the browser build
+and once against a fake `AndroidBridge`, because the voice and the microphone live on the
+native side.
+
+"The middle of a card" is two moments, because the app is never speaking and listening at
+once (the microphone would hear the tablet say the word and credit her for it): the ear
+open waiting for her, and the word being repeated with the ear shut. Every exit is taken
+from both.
+
+It checks the other direction too: pressing *Back to her screen* must give her a live
+card again, not a picture that no longer does anything.
+
+`test/harness.js` holds the fakes and counts every `setTimeout` the page arms. Take an
+exit path out of `standDown()` and the matching cases fail; take `resume()` out of
+`closeParent()` and only the coming-back cases fail. Nothing else moves.
+
+Two more checks drive the page in a real Chromium through Playwright and are not in CI
+yet: `node tools/session-check.mjs` (cards advancing on their own, the dead microphone,
+the app hearing itself, the bottom-edge brush) and `node tools/matcher-check.mjs` (what
+the forgiving matcher must and must not accept, including Japanese kanji).
+
+The **Session teardown** job in `.github/workflows/build-apk.yml` runs it on every push
+and pull request, alongside the APK build.
+
+The APK build itself is on `android-actions/setup-android@v4`. v3 targets Node 20 and does
+not survive the Node 24 runner migration, so it fails at *Set up Android SDK* in about
+fourteen seconds.
 
 ## Building
 
@@ -117,7 +234,9 @@ was wrong — they were in the root `build.gradle`, which has no dependencies to
 * The speech matcher is deliberately forgiving — roughly 45% Levenshtein tolerance plus a
   first-two-characters escape. A two-year-old saying "tutu" for *kutsu* must count. Do not
   tighten it to make tests pass.
-* `index.html` stays a single file that runs in a plain browser with no bridge.
+* `index.html` stays a single file that runs in a plain browser with no bridge — the
+  teardown test loads it exactly as it ships, so a fork into an Android-only copy breaks it.
+* A new way out of her session gets a row in `EXITS` in `test/session-teardown.test.js`.
 * Every way out of her session goes through `standDown()`. Adding a new exit — a route, a
   gesture, a lifecycle callback — means calling it, not hiding her screen. A CSS class
   stops nothing: the voice keeps talking, the recogniser keeps the microphone, and the

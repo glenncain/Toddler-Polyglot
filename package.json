@@ -1,0 +1,12 @@
+{
+  "name": "eleven-minutes-tests",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Regression tests for app/src/main/assets/index.html. The app itself ships as that one file; this package exists only so CI can run it under a DOM.",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "jsdom": "^26.1.0"
+  }
+}
