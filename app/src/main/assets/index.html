@@ -306,38 +306,52 @@ const nativeSpeak = (text,langTag)=>new Promise(res=>{
   try{ NB.speak(text, langTag, id); }catch(e){ ttsSettle(id, false); }
 });
 
-/* ══ 1. the same thirty objects, in all four ══ */
+/* ══ 1. the same thirty objects and ten numbers, in all four ══ */
 const OBJ=[
+/* Numbers one to ten sit after every third object, because new words are introduced in
+   this order among words of the same length: appended at the end, they would not appear
+   for about four weeks. Recognisers often hand back the digit ("3") rather than the word,
+   so the digit is in every language's other spellings, beside any common homophone. */
 ["cup","🥤","cup","taza",["コップ","koppu"],["杯子","beizi"],"when you hand her the cup at dinner"],
 ["dog","🐶","dog","perro",["いぬ","inu",["犬","イヌ"]],["狗","gou"],"the next dog you pass on the walk"],
 ["shoe","👟","shoe","zapato",["くつ","kutsu",["靴"]],["鞋","xie"],"at the door, one shoe in each hand"],
+["one","1️⃣",["one","one",["1","won"]],["uno","uno",["1"]],["いち","ichi",["一","1"]],["一","yi",["1"]],"one finger up, before the first bite"],
 ["door","🚪","door","puerta",["ドア","doa"],["门","men"],"every time she shuts one behind her"],
 ["cat","🐱","cat","gato",["ねこ","neko",["猫","ネコ"]],["猫","mao"],"in a book, before you turn the page"],
 ["ball","⚽","ball","pelota",["ボール","booru"],["球","qiu"],"before you roll it back to her"],
+["two","2️⃣",["two","two",["2","to","too"]],["dos","dos",["2"]],["に","ni",["二","2"]],["二","er",["两","2"]],"two shoes at the door, one in each hand"],
 ["water","💧","water","agua",["みず","mizu",["水"]],["水","shui"],"when she asks for a drink"],
 ["milk","🥛","milk","leche",["ミルク","miruku"],["牛奶","niunai"],"pouring, before she gets the cup"],
 ["apple","🍎","apple","manzana",["りんご","ringo",["林檎","リンゴ"]],["苹果","pingguo"],"holding it up before you cut it"],
+["three","3️⃣",["three","three",["3"]],["tres","tres",["3"]],["さん","san",["三","3"]],["三","san",["3"]],"the last three stairs, one at a time"],
 ["banana","🍌","banana","plátano",["バナナ","banana"],["香蕉","xiangjiao"],"while you peel it"],
 ["bird","🐦","bird","pájaro",["とり","tori",["鳥","トリ"]],["鸟","niao"],"pointing out the window"],
 ["fish","🐟","fish","pez",["さかな","sakana",["魚","サカナ"]],["鱼","yu"],"at the fish counter"],
+["four","4️⃣",["four","four",["4","for"]],["cuatro","cuatro",["4"]],["よん","yon",["四","4"]],["四","si",["4"]],"pointing at each wheel on the car"],
 ["hand","✋","hand","mano",["て","te",["手"]],["手","shou"],"washing hands before dinner"],
 ["foot","🦶","foot","pie",["あし","ashi",["足","脚"]],["脚","jiao"],"putting socks on"],
 ["eye","👁️","eye","ojo",["め","me",["目"]],["眼睛","yanjing"],"in the mirror together"],
+["five","5️⃣",["five","five",["5"]],["cinco","cinco",["5"]],["ご","go",["五","5"]],["五","wu",["5"]],"fingers spread at bath time"],
 ["mouth","👄","mouth","boca",["くち","kuchi",["口"]],["嘴","zui"],"wiping her face after eating"],
 ["hat","🎩","hat","sombrero",["ぼうし","booshi",["帽子"]],["帽子","maozi"],"on the way out the door"],
 ["sock","🧦","sock","calcetín",["くつした","kutsushita",["靴下"]],["袜子","wazi"],"getting dressed in the morning"],
+["six","6️⃣",["six","six",["6"]],["seis","seis",["6"]],["ろく","roku",["六","6"]],["六","liu",["6"]],"grapes in a row on her plate"],
 ["book","📖","book","libro",["ほん","hon",["本"]],["书","shu"],"when she picks tonight's story"],
 ["car","🚗","car","coche",["くるま","kuruma",["車"]],["车","che"],"buckling her into the seat"],
 ["chair","🪑","chair","silla",["いす","isu",["椅子"]],["椅子","yizi"],"as she climbs into hers"],
+["seven","7️⃣",["seven","seven",["7"]],["siete","siete",["7"]],["なな","nana",["七","しち","7"]],["七","qi",["7"]],"counting steps to the front door"],
 ["bed","🛏️","bed","cama",["ベッド","beddo"],["床","chuang"],"the last thing before lights out"],
 ["spoon","🥄","spoon","cuchara",["スプーン","supuun"],["勺子","shaozi"],"handing it over, not before"],
 ["bread","🍞","bread","pan",["パン","pan"],["面包","mianbao"],"passing her a piece at the table"],
+["eight","8️⃣",["eight","eight",["8","ate"]],["ocho","ocho",["8"]],["はち","hachi",["八","8"]],["八","ba",["8"]],"toys going back into the box"],
 ["egg","🥚","egg","huevo",["たまご","tamago",["卵","玉子"]],["蛋","dan"],"cracking one at breakfast"],
 ["flower","🌸","flower","flor",["はな","hana",["花"]],["花","hua"],"on the walk, before she picks it"],
 ["tree","🌳","tree","árbol",["き","ki",["木"]],["树","shu"],"looking up from the buggy"],
+["nine","9️⃣",["nine","nine",["9"]],["nueve","nueve",["9"]],["きゅう","kyuu",["九","9"]],["九","jiu",["9"]],"blocks stacked before the tower falls"],
 ["moon","🌙","moon","luna",["つき","tsuki",["月"]],["月亮","yueliang"],"at the window after bath"],
 ["star","⭐","star","estrella",["ほし","hoshi",["星"]],["星星","xingxing"],"lights out, curtains open"],
-["sun","☀️","sun","sol",["たいよう","taiyoo",["太陽"]],["太阳","taiyang"],"opening the curtains"]
+["sun","☀️","sun","sol",["たいよう","taiyoo",["太陽"]],["太阳","taiyang"],"opening the curtains"],
+["ten","🔟",["ten","ten",["10"]],["diez","diez",["10"]],["じゅう","juu",["十","10"]],["十","shi",["10"]],"ten toes, drying her feet"]
 ];
 const LANGS={
  en:{name:"English",flag:"🇬🇧",code:"en-US",hex:"#6A4C93",on:"#F7F3FB"},
