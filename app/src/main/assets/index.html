@@ -41,6 +41,10 @@ body{font-family:var(--display);background:var(--night);color:var(--ink);-webkit
 #picture.said{animation:said .5s cubic-bezier(.2,1.6,.35,1)}
 @keyframes said{0%{transform:scale(1)}45%{transform:scale(1.09)}100%{transform:scale(1)}}
 #picture:active{transform:scale(.97)}
+/* The invite wobble is an animation, and an animation beats :active, so a press during it
+   used to show nothing at all. pointerdown now drops the wobble and gives this instead. */
+#picture.press{animation:press .22s ease-out}
+@keyframes press{0%{transform:scale(1)}40%{transform:scale(.93)}100%{transform:scale(1)}}
 #picture img{width:100%;height:100%;object-fit:cover;border-radius:inherit;display:block;pointer-events:none;-webkit-user-drag:none}
 
 #ear{
@@ -540,7 +544,7 @@ async function say(e,times=2){
     for(let i=0;i<times;i++){
       if(ended||queue[idx]!==e) return;
       await sayOnce(e);
-      if(i<times-1) await new Promise(r=>setTimeout(r,480));
+      if(i<times-1) await new Promise(r=>setTimeout(r,GAP_MS));
     }
   } finally { speaking=false; }
 }
@@ -604,6 +608,15 @@ const unlisten=()=>{
 };
 
 /* ══ 6. eleven minutes ══ */
+/* The pace of a card. Each of these is time she spends standing in front of a picture
+   that is doing nothing, so they are kept as short as the card allows.
+   SAY_TIMES  — the word used to be said twice before the ear opened, so she heard it,
+                said it straight back, and spoke into a microphone that was not open yet.
+                Once, then listen. A tap says it again; so does the quiet repeat.
+   NUDGE_MS   — a new card plays its word on its own after this, if she has not tapped.
+                It was 9s, which after every correct answer read as the app stalling.
+   NEXT_MS    — after she says it: long enough for the chime and the bounce (0.5s). */
+const SAY_TIMES=1, GAP_MS=300, NUDGE_MS=2500, NEXT_MS=600;
 let queue=[],idx=0,log=[],t0=0,cardT0=0,prompts=0,ended=true,busy=false,tapped=false,tmr=[];
 let stood=false;                          // a live session was stopped by an exit, not by finishing
 const clearT=()=>{tmr.forEach(clearTimeout);tmr=[]};
@@ -628,7 +641,8 @@ function card(){
   const p=$("picture");
   showPicture(p,e); p.classList.remove("said"); p.classList.add("invite");
   $("ear").classList.remove("on");
-  later(()=>{ if(!tapped&&!ended&&queue[idx]===e) heard0(e); },9000);   // she never tapped; nudge her
+  if(NB&&NB.prepare){ try{ NB.prepare(LANGS[e.lang].code); }catch(_){} }  // load the voice now, not on her tap
+  later(()=>{ if(!tapped&&!ended&&queue[idx]===e) heard0(e); },NUDGE_MS);   // she has not tapped; say it for her
 }
 function showPicture(p,e){
   const src=(typeof PICS!=="undefined")&&PICS[e.obj];
@@ -657,13 +671,17 @@ async function heard0(e){                                              // play, 
   if(ended||queue[idx]!==e) return;
   tapped=true;
   $("picture").classList.remove("invite");
-  await say(e,2);
+  await say(e,SAY_TIMES);
   if(ended||queue[idx]!==e) return;
   cardHit=()=>advance(true,true);
   openEar(e);
   later(()=>{ if(!busy&&queue[idx]===e){prompts++; replay(e,1);} },7000);  // one quiet repeat
   later(()=>{ if(!busy&&queue[idx]===e) advance(false); },19000);
 }
+$("picture").addEventListener("pointerdown",()=>{       // feedback on touch, not on release
+  const p=$("picture"); p.classList.remove("invite","press"); void p.offsetWidth; p.classList.add("press");
+});
+$("picture").addEventListener("animationend",ev=>{ if(ev.animationName==="press") $("picture").classList.remove("press"); });
 $("picture").onclick=()=>{
   const e=queue[idx];
   if(ended||!e) return;
@@ -685,7 +703,7 @@ function advance(said,unprompted){
     if(at<CARDS&&!queue.slice(idx+1).includes(e)) queue.splice(Math.min(at,queue.length),0,e);
     if(st.missStreak>=3){ st.retired=true; const s=easierIn(e.lang,queue.map(q=>q.id)); if(s) queue.push(s); }
   }
-  idx++; later(card,said?900:300);
+  idx++; later(card,said?NEXT_MS:300);
 }
 /* These two are for the parent, and they stretch across the entire bottom edge — which
    is exactly where a three-year-old's hand sits while she holds the tablet. A brush of a
