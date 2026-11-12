@@ -104,6 +104,7 @@ function installBridge(win) {
   const tts = {
     hushes: 0,
     said: [],
+    prepared: [],
     get speaking() { return waiting.length > 0; },
     finish() {
       const done = waiting.splice(0);
@@ -123,6 +124,7 @@ function installBridge(win) {
     }),
     hasVoice: () => true,
     speak(text, langTag, reqId) { tts.said.push(text); waiting.push(reqId); },
+    prepare(langTag) { tts.prepared.push(langTag); },
     shutUp() { tts.hushes += 1; waiting.splice(0); },
     asrAvailable: () => true,
     startListening() { asr.starts += 1; open.on = true; },
@@ -219,9 +221,7 @@ async function intoTheMiddleOfACard(app, moment = 'listening') {
 
   app.$('picture').click();                       // she taps the picture
   await waitFor(() => app.tts.speaking, 'the word to be spoken');
-  app.tts.finish();
-  await waitFor(() => app.tts.speaking, 'the word to be spoken a second time');
-  app.tts.finish();
+  app.tts.finish();                               // said once, then it listens
   await waitFor(() => app.$('ear').classList.contains('on'), 'the ear to open');
 
   if (moment === 'speaking') {

@@ -127,8 +127,6 @@ for (const build of BUILDS) {
     app.$('picture').click();                      // she taps it, the way she would
     await app.waitFor(() => app.tts.speaking, 'the word to be spoken again');
     app.tts.finish();
-    await app.waitFor(() => app.tts.speaking, 'the word to be spoken a second time');
-    app.tts.finish();
     await app.waitFor(() => app.$('ear').classList.contains('on'), 'the ear to open again');
 
     assert.ok(app.asr.open, 'she came back to a picture that no longer listens to her');

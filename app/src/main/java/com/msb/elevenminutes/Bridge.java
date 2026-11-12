@@ -171,6 +171,18 @@ public class Bridge {
         });
     }
 
+    /* Every card is a different language from the one before it, and speak() switched the
+       voice at the moment she tapped, so loading that voice was part of the wait between
+       her tap and the word. The page calls this as the card appears instead. It says
+       nothing and touches nothing but the language. */
+    @JavascriptInterface
+    public void prepare(final String langTag) {
+        ui.post(() -> {
+            if (!ttsReady || tts == null) return;
+            try { tts.setLanguage(locale(langTag)); } catch (Throwable ignored) {}
+        });
+    }
+
     @JavascriptInterface
     public void shutUp() {
         ui.post(() -> { try { if (tts != null) tts.stop(); } catch (Throwable ignored) {} });
