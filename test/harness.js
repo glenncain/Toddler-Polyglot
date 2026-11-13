@@ -88,7 +88,14 @@ function installWebSpeech(win) {
   };
   function Recognition() { this.lang = ''; }
   Recognition.prototype.start = function () { asr.starts += 1; open.add(this); };
-  Recognition.prototype.stop = function () { asr.stops += 1; open.delete(this); };
+  /* A real recogniser reports end a moment after stop(), and the page restarts one that
+     ends on its own, so the fake has to do the same or a restart that should not happen
+     is invisible here. */
+  Recognition.prototype.stop = function () {
+    asr.stops += 1;
+    const was = open.delete(this);
+    if (was) setTimeout(() => { if (typeof this.onend === 'function') this.onend(); }, 0);
+  };
   Recognition.prototype.abort = function () { this.stop(); };
   win.webkitSpeechRecognition = Recognition;
 
