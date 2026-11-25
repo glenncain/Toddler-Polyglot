@@ -515,17 +515,31 @@ function stopClip(){
   audioEl=null;
   if(audioRes){ const stale=audioRes; audioRes=null; stale(false); }
 }
+/* The browser voice can go quiet without saying so: an utterance nothing else holds can be
+   collected before its end event, a cancel does not always fire one, and synthesis stays
+   paused after the tab has been in the background. Any of those used to leave say() waiting
+   for good, and every tap after it was dropped. So the waiter can be settled from outside,
+   and it gives up on its own after the same 6s the Android voice does. */
+let synthSettle=null, synthHeld=null;
+const settleSynth=()=>{ if(synthSettle) synthSettle(false); };
 function synth(e){
   if(NB) return nativeSpeak(e.say, LANGS[e.lang].code);
   return new Promise(res=>{
     if(!window.speechSynthesis) return res(false);
-    try{speechSynthesis.cancel()}catch(_){}
-    const c=LANGS[e.lang].code,v=pickVoice(c);
-    if(!v) return res(false);
+    const c=LANGS[e.lang].code;
+    if(!voices.length) refresh();                  // a tap can come before voiceschanged
+    const v=pickVoice(c);
+    if(!v&&voices.length) return res(false);       // the list is in, and nothing speaks this
+    let t=null;
+    const done=ok=>{ if(synthSettle!==done) return; synthSettle=null; synthHeld=null; clearTimeout(t); res(ok); };
+    synthSettle=done;
     const u=new SpeechSynthesisUtterance(e.say);
-    u.lang=c; u.voice=v; u.rate=.68; u.pitch=1.06;
-    u.onend=()=>res(true); u.onerror=()=>res(false);
-    speechSynthesis.speak(u);
+    u.lang=c; if(v) u.voice=v; u.rate=.68; u.pitch=1.06;
+    u.onend=()=>done(true); u.onerror=()=>done(false);
+    synthHeld=u;
+    t=setTimeout(()=>done(true),6000);
+    try{ speechSynthesis.resume(); }catch(_){}
+    try{ speechSynthesis.speak(u); }catch(_){ done(false); }
   });
 }
 async function sayOnce(e){
@@ -536,17 +550,28 @@ async function sayOnce(e){
   }
   return synth(e);
 }
-let speaking=false;
+/* One voice at a time, and the newest one wins. say() used to return without a sound
+   whenever an earlier saying had not settled yet — a tap during the word, a tap on a new
+   card while the last card's word was still going, or after a voice that never reported
+   it had finished. The picture still bounced, nothing was said, and the ear opened anyway.
+   Now a new saying stops the old one, and the old one's caller is told it was cut off
+   (false), so only the newest caller opens the ear. */
+let voiceGen=0;
+function stopVoice(){
+  voiceGen++;
+  if(NB){ try{ NB.shutUp(); }catch(e){} ttsAbandon(); }
+  else{ try{ if(speechSynthesis.speaking||speechSynthesis.pending) speechSynthesis.cancel(); }catch(e){} }
+  settleSynth(); stopClip();
+}
 async function say(e,times=2){
-  if(speaking) return;                       // two playbacks at once deadlocked the card
-  speaking=true;
-  try{
-    for(let i=0;i<times;i++){
-      if(ended||queue[idx]!==e) return;
-      await sayOnce(e);
-      if(i<times-1) await new Promise(r=>setTimeout(r,GAP_MS));
-    }
-  } finally { speaking=false; }
+  stopVoice(); const g=voiceGen;
+  const mine=()=>g===voiceGen && !ended && queue[idx]===e;
+  for(let i=0;i<times;i++){
+    if(!mine()) return false;
+    await sayOnce(e);
+    if(i<times-1) await new Promise(r=>setTimeout(r,GAP_MS));
+  }
+  return mine();
 }
 
 /* ══ 5. hearing a three-year-old ══ */
@@ -568,13 +593,18 @@ function heard(t,e){
 /* The card does not advance until it hears her, so a recogniser that stops listening —
    it timed out, the device was busy, it gave up — cannot just be left dead. She is still
    standing in front of the picture. Put it back, up to a point. */
+/* unlisten() bumps earGen. A recogniser restart that was already on its way — the 250ms
+   re-arm after an error, or a browser recogniser reporting end after stop() — used to put
+   the microphone back on while the tablet was saying the word again. */
+let earGen=0;
 function listen(e,hit){
-  const stillHers=()=>!ended && !busy && queue[idx]===e;
+  const g=earGen;
+  const stillHers=()=>g===earGen && !ended && !busy && queue[idx]===e;
   if(NB){
     if(!NCAP||!NCAP.asr) return false;
     let tries=0;
     const arm=()=>{
-      asrHit = txt=>{ if(heard(txt,e)) hit(); };
+      asrHit = txt=>{ if(stillHers() && heard(txt,e)) hit(); };
       asrErr = ()=>{
         if(!stillHers() || ++tries>6){ $("ear").classList.remove("on"); return; }
         setTimeout(()=>{ if(stillHers()) arm(); }, 250);
@@ -591,7 +621,7 @@ function listen(e,hit){
     rec.interimResults=true; rec.continuous=true; rec.maxAlternatives=5;
     const mine=rec;
     rec.onresult=ev=>{
-      if(rec!==mine) return;                       // a superseded recogniser, still talking
+      if(rec!==mine||!stillHers()) return;         // a superseded or stopped recogniser, still talking
       let all="";
       for(let i=0;i<ev.results.length;i++)for(let k=0;k<ev.results[i].length;k++)all+=" "+ev.results[i][k].transcript;
       if(heard(all,e)) hit();
@@ -603,6 +633,7 @@ function listen(e,hit){
   try{ start(); return true; }catch(_){ return false; }
 }
 const unlisten=()=>{
+  earGen++;
   if(NB){ asrHit=null; asrErr=null; asrOpen=null; asrWant=-1; try{ NB.stopListening(); }catch(e){} return; }
   try{if(rec)rec.stop()}catch(e){}
 };
@@ -635,7 +666,7 @@ function card(){
   clearT(); unlisten();
   if(ended) return;
   if(idx>=queue.length||Date.now()-t0>=ELEVEN) return finish();
-  const e=queue[idx]; busy=false; tapped=false; prompts=0; cardHit=null; stopClip(); cardT0=Date.now();
+  const e=queue[idx]; busy=false; tapped=false; prompts=0; cardHit=null; stopVoice(); cardT0=Date.now();
   document.documentElement.style.setProperty("--stage",LANGS[e.lang].hex);
   document.documentElement.style.setProperty("--on",LANGS[e.lang].on);
   const p=$("picture");
@@ -664,17 +695,16 @@ function openEar(e){
    never once said out loud. */
 async function replay(e,times){
   unlisten(); $("ear").classList.remove("on");
-  await say(e,times);
-  openEar(e);
+  if(await say(e,times)) openEar(e);            // cut off by a newer saying: that one opens it
 }
 async function heard0(e){                                              // play, then open the ear
   if(ended||queue[idx]!==e) return;
   tapped=true;
   $("picture").classList.remove("invite");
-  await say(e,SAY_TIMES);
+  const whole=await say(e,SAY_TIMES);
   if(ended||queue[idx]!==e) return;
   cardHit=()=>advance(true,true);
-  openEar(e);
+  if(whole) openEar(e);
   later(()=>{ if(!busy&&queue[idx]===e){prompts++; replay(e,1);} },7000);  // one quiet repeat
   later(()=>{ if(!busy&&queue[idx]===e) advance(false); },19000);
 }
@@ -684,7 +714,9 @@ $("picture").addEventListener("pointerdown",()=>{       // feedback on touch, no
 $("picture").addEventListener("animationend",ev=>{ if(ev.animationName==="press") $("picture").classList.remove("press"); });
 $("picture").onclick=()=>{
   const e=queue[idx];
-  if(ended||!e) return;
+  /* busy: the card is on its way out and queue[idx] is already the next word, so a tap
+     here used to say that word over the old picture. The next card plays its own. */
+  if(ended||busy||!e) return;
   if(!tapped) heard0(e); else replay(e,1);
 };
 function advance(said,unprompted){
@@ -744,6 +776,7 @@ function hush(){                              // whatever is talking, on either 
   if(NB){ try{ NB.shutUp(); }catch(e){} }
   ttsAbandon();                               // and the fallback timer each speak() armed
   try{ speechSynthesis.cancel(); }catch(e){}
+  settleSynth();                              // and the browser voice's own fallback timer
   stopClip();                                 // and settles the say() awaiting it
 }
 function releaseMic(){                        // everything that can hold the microphone
@@ -771,6 +804,9 @@ function resume(){
 window.__standDown = standDown;               // the Android host calls this from onPause()
 
 /* ══ 7. the end, said without a word ══ */
+/* Her day, not London's: toISOString() is UTC, so west of it an evening session was dated
+   tomorrow, and a morning and an evening run counted as two days. */
+const localDay=d=>d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
 function finish(){
   if(ended) return; ended=true; stood=false;
   clearT(); releaseMic(); cardHit=null; hush();
@@ -782,8 +818,8 @@ function finish(){
   $("picture").style.background="transparent"; $("picture").style.boxShadow="none";
   $("moon").classList.add("on");
 
-  const today=new Date().toISOString().slice(0,10);
-  const y=new Date(Date.now()-864e5).toISOString().slice(0,10);
+  const today=localDay(new Date());
+  const y=localDay(new Date(Date.now()-864e5));
   const sameDay = S.lastDate===today;
   S.streak=(S.lastDate===y||sameDay)?(sameDay?S.streak:S.streak+1):1;
   S.lastDate=today;
@@ -941,13 +977,17 @@ async function micStream(want){
   }
 }
 
+/* Each recording stops itself after 4s. That timer used to stop whatever recording was
+   running when it fired, so a second word recorded within 4s of the first was cut short. */
+let recRun=0;
 async function startRec(key,btn){
+  const run=++recRun;
   if(nativeCap){
     recKey=key;
     if(!NB.recStart()) return;                 // the bridge reports why through __recFail
     nativeRecording=true;
     btn.classList.add("rec"); btn.textContent="■";
-    setTimeout(()=>{ if(nativeRecording) stopRec(); },4000);
+    setTimeout(()=>{ if(nativeRecording&&run===recRun) stopRec(); },4000);
     return;
   }
   try{
@@ -964,7 +1004,7 @@ async function startRec(key,btn){
       fr.readAsDataURL(blob);
     };
     mediaRec.start();
-    setTimeout(()=>{ if(mediaRec&&mediaRec.state==="recording") stopRec(); },4000);
+    setTimeout(()=>{ if(run===recRun&&mediaRec&&mediaRec.state==="recording") stopRec(); },4000);
   }catch(e){ toast("no microphone — "+((e&&e.name)||"?")); }
 }
 function stopRec(){

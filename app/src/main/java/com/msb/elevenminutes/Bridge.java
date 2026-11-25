@@ -134,6 +134,9 @@ public class Bridge {
                     @Override public void onStart(String id) {}
                     @Override public void onDone(String id) { toJs("window.__ttsDone && window.__ttsDone(" + id + ",true)"); }
                     @Override public void onError(String id) { toJs("window.__ttsDone && window.__ttsDone(" + id + ",false)"); }
+                    /* A word cut off by stop() or by the next speak's QUEUE_FLUSH gets onStop,
+                       never onDone. Without this the page waited out its 6s fallback for it. */
+                    @Override public void onStop(String id, boolean interrupted) { toJs("window.__ttsDone && window.__ttsDone(" + id + ",false)"); }
                 });
             }
             toJs("window.__ttsReady && window.__ttsReady(" + ttsReady + ")");
@@ -164,7 +167,9 @@ public class Bridge {
             }
             try {
                 tts.setLanguage(locale(langTag));
-                tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, String.valueOf(reqId));
+                // ERROR here means no callback is ever coming for this id
+                if (tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, String.valueOf(reqId)) != TextToSpeech.SUCCESS)
+                    toJs("window.__ttsDone && window.__ttsDone(" + reqId + ",false)");
             } catch (Throwable t) {
                 toJs("window.__ttsDone && window.__ttsDone(" + reqId + ",false)");
             }
@@ -251,6 +256,7 @@ public class Bridge {
        offline first, and if the answer is one of the "no on-device model" failures,
        come back once over the network rather than reporting silence. */
     private void begin(final String langTag, final boolean preferOffline, final int seq) {
+        synchronized (this) { if (seq != asrSeq) return; }   // stopped, or replaced by a newer listen
         if (!asrAvailable()) {
             toJs("window.__asrError && window.__asrError(\"unavailable\"," + preferOffline
                  + ",false,false," + seq + ")");
@@ -360,7 +366,13 @@ public class Bridge {
     }
 
     @JavascriptInterface
-    public void stopListening() { ui.post(this::releaseAsr); }
+    public synchronized void stopListening() {
+        /* A begin() can still be on its way: the delayed start after the mic handover, or the
+           network retry. Moving the number on makes it stand down, so a stop is a stop and the
+           recogniser cannot open while the tablet is saying the word. */
+        ++asrSeq;
+        ui.post(this::releaseAsr);
+    }
 
     /* The old version left the recogniser alive after an error, so a failed listen kept
        the microphone bound for the rest of the session and everything that asked for it
