@@ -659,6 +659,10 @@ function startSession(){
   idx=0; log=[]; t0=Date.now(); ended=false; stood=false;
   $("parent").classList.remove("on");
   $("moon").classList.remove("on");
+  /* The card's white face comes back here, when a new session starts, and not on a timer
+     after finish(). It used to return 600ms after the end, empty, with the moon floating
+     over it: the end of the day looked exactly like a moon card, and tapping it did nothing. */
+  $("picture").style.background=""; $("picture").style.boxShadow="";
   $("hands").style.display="flex";
   card();
 }
@@ -825,7 +829,6 @@ function finish(){
   S.lastDate=today;
   if(!sameDay) S.day++;              // a second run today is still today, not tomorrow
   saveState(); paintParent();
-  later(()=>{ $("picture").style.background=""; $("picture").style.boxShadow=""; },600);
 }
 
 /* ══ 8. their screen ══ */
