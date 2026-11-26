@@ -128,8 +128,9 @@ textarea{width:100%;height:150px;font-family:var(--data);font-size:11px;line-hei
 .note{font-family:var(--data);font-size:11.5px;line-height:1.75;color:var(--soft)}
 .hide{display:none!important}
 
-#toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(150%);background:var(--ink);color:var(--ground);padding:13px 20px;border-radius:13px;font-family:var(--data);font-size:11px;letter-spacing:.12em;text-transform:uppercase;transition:transform .32s cubic-bezier(.2,1,.3,1);z-index:99}
-#toast.up{transform:translateX(-50%) translateY(0)}
+#toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(150%);background:var(--ink);color:var(--ground);padding:13px 20px;border-radius:13px;font-family:var(--data);font-size:11px;letter-spacing:.12em;text-transform:uppercase;transition:transform .32s cubic-bezier(.2,1,.3,1),opacity .32s;z-index:99;
+  opacity:0;pointer-events:none}   /* hidden, it still peeked 13px up from the bottom of her screen */
+#toast.up{transform:translateX(-50%) translateY(0);opacity:1}
 .pill{font-family:var(--data);font-size:10px;letter-spacing:.1em;text-transform:uppercase;padding:5px 10px;border-radius:99px;background:var(--line);color:var(--soft);white-space:nowrap}
 .pill.good{background:#2A8271;color:#F0FBF7}
 .pill.warn{background:#EFB135;color:#2A2103}
@@ -225,11 +226,14 @@ textarea{width:100%;height:150px;font-family:var(--data);font-size:11px;line-hei
 
   <div>
     <h2>Keeping it offline</h2>
-    <p class="sub">Save the voice pack to the iPad, then load it back after you copy this file across. Nothing here talks to a server.</p>
+    <p class="sub">Save the voice pack to the iPad, then load it back after you copy this file across. This page itself sends nothing to a server; the one exception is speech recognition for a language with no offline pack (see the note at the bottom).</p>
     <div class="acts" style="margin-top:13px">
       <button class="act ghost" id="dlVoices">Save voice pack</button>
       <button class="act ghost" id="upVoices">Load voice pack</button>
       <button class="act ghost" id="reset">Start over</button>
+    </div>
+    <div class="acts hide" id="resetAsk" style="margin-top:13px">
+      <button class="act" id="resetYes" style="background:var(--es)">Erase her progress and your recordings</button>
     </div>
     <input type="file" id="filein" accept="application/json" class="hide">
   </div>
@@ -656,6 +660,7 @@ function toast(m){const t=$("toast");t.textContent=m;t.classList.add("up");setTi
 
 function startSession(){
   queue=buildQueue(); if(!queue.length){toast("pick a language");return;}
+  stopChecks();                             // the device check must not keep the mic she needs
   idx=0; log=[]; t0=Date.now(); ended=false; stood=false;
   $("parent").classList.remove("on");
   $("moon").classList.remove("on");
@@ -806,21 +811,29 @@ function resume(){
   card();
 }
 window.__standDown = standDown;               // the Android host calls this from onPause()
+window.__resume = resume;                     // ...and this from onResume(), not relying on focus events
 
 /* ══ 7. the end, said without a word ══ */
-/* Her day, not London's: toISOString() is UTC, so west of it an evening session was dated
-   tomorrow, and a morning and an evening run counted as two days. */
-const localDay=d=>d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
-function finish(){
-  if(ended) return; ended=true; stood=false;
-  clearT(); releaseMic(); cardHit=null; hush();
-  $("ear").classList.remove("on"); $("picture").classList.remove("invite");
+/* Her screen when there is no session: the night colour and the moon, and no card. Used at
+   the end of the day and before the first session of a launch. The launch used to paint a
+   white card with a baby face on it, which did nothing when tapped: a grown-up who pressed
+   "Back to her screen" before "Start today" handed her a card that could never answer. */
+function restScreen(){
+  $("ear").classList.remove("on"); $("picture").classList.remove("invite","press","said");
   $("hands").style.display="none";
   document.documentElement.style.setProperty("--stage","var(--night)");
   document.documentElement.style.setProperty("--on","#EBE7F1");
   $("picture").textContent="";
   $("picture").style.background="transparent"; $("picture").style.boxShadow="none";
   $("moon").classList.add("on");
+}
+/* Her day, not London's: toISOString() is UTC, so west of it an evening session was dated
+   tomorrow, and a morning and an evening run counted as two days. */
+const localDay=d=>d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+function finish(){
+  if(ended) return; ended=true; stood=false;
+  clearT(); releaseMic(); cardHit=null; hush();
+  restScreen();
 
   const today=localDay(new Date());
   const y=localDay(new Date(Date.now()-864e5));
@@ -833,7 +846,7 @@ function finish(){
 
 /* ══ 8. their screen ══ */
 function openParent(){ standDown(); paintParent(); $("parent").classList.add("on"); }
-function closeParent(){ $("parent").classList.remove("on"); resume(); }
+function closeParent(){ $("parent").classList.remove("on"); stopChecks(); resume(); }
 let holdT=null;
 $("gate").addEventListener("pointerdown",()=>{holdT=setTimeout(openParent,1600)});
 ["pointerup","pointerleave","pointercancel"].forEach(ev=>$("gate").addEventListener(ev,()=>clearTimeout(holdT)));
@@ -907,7 +920,7 @@ function paintParent(){
   if(NB){
     bits.push("On "+(NCAP&&NCAP.device?NCAP.device:"this device")+", Android API "+(NCAP?NCAP.api:"?")+".");
     bits.push(NCAP&&NCAP.asr
-      ? "Speech recognition is on-device. Offline recognition has to be downloaded per language in Settings → System → Languages → Voice input."
+      ? "Speech recognition tries the tablet's offline voice pack first. For a language with no pack downloaded, the tablet's recogniser (usually Google's) sends what she says over the internet instead, and keeps doing so for that language. Download the packs in Settings → System → Languages → Voice input to keep her voice on the tablet."
       : "No speech recogniser on this device, so use ✓ under the picture when she says it.");
     bits.push(NCAP&&NCAP.tts?"Text to speech is ready.":"No text-to-speech engine responded — record the words in your own voices.");
   } else {
@@ -1019,6 +1032,21 @@ function stopRec(){
    Every claim on this panel is measured on the device, not assumed. The two
    per-language tests need you in the room, because only you can say whether a
    voice really came out of the speaker. */
+/* The device check opens the microphone and arms its own timers (4.5s for the level meter,
+   9s for each listening test). None of that was in the session's timer list, so a grown-up
+   who ran a test and went straight to "Start today" left it running under her first card:
+   the level meter could still hold the microphone, and the listening test's 9s timer shut
+   her recogniser off mid-card while the ring still breathed as if it were listening. Leaving
+   the panel or starting her session ends every check; their timers check diagGen. */
+let diagGen=0, diagStream=null;
+function stopChecks(){
+  diagGen++;
+  releaseMic();
+  try{ if(diagStream) diagStream.getTracks().forEach(x=>x.stop()); }catch(e){}
+  diagStream=null; levelHit=null;
+  if(DIAG.mic==="testing") DIAG.mic=null;
+  LK.forEach(l=>{ const d=DIAG.langs[l]; if(d.asr==="listening") d.asr=null; if(d.spoke==="speaking") d.spoke=null; });
+}
 const DIAG={ran:false,mic:null,micErr:"",peak:0,asr:null,asrLog:[],store:null,rec:null,native:null,recog:null,langs:{}};
 LK.forEach(l=>DIAG.langs[l]={voice:null,spoke:null,asr:null,text:"",err:"",opened:false});
 const TESTWORD=l=>ALL.find(a=>a.obj==="shoe"&&a.lang===l);
@@ -1073,8 +1101,11 @@ async function diagRun(){
 async function diagMic(){
   DIAG.mic="testing"; DIAG.peak=0; DIAG.micErr=""; paintDiag();
   if(nativeCap) return diagMicNative();
+  const g=diagGen;
   try{
     const stream=await micStream({audio:true});
+    if(g!==diagGen){ stream.getTracks().forEach(x=>x.stop()); return; }
+    diagStream=stream;
     ac=ac||new (window.AudioContext||window.webkitAudioContext)();
     if(ac.state==="suspended"){ try{ await ac.resume(); }catch(e){} }
     const src=ac.createMediaStreamSource(stream), an=ac.createAnalyser();
@@ -1085,9 +1116,10 @@ async function diagMic(){
       let p=0; for(let i=0;i<buf.length;i++){ const d=Math.abs(buf[i]-128)/128; if(d>p) p=d; }
       if(p>DIAG.peak) DIAG.peak=p;
       const bar=$("micbar"); if(bar) bar.style.width=Math.round(Math.min(1,p*2.4)*100)+"%";
+      if(g!==diagGen) return;                   // stopChecks() already closed the stream
       if(Date.now()-t0<4500) requestAnimationFrame(loop);
       else{
-        stream.getTracks().forEach(x=>x.stop());
+        stream.getTracks().forEach(x=>x.stop()); diagStream=null;
         DIAG.mic = DIAG.peak>0.045 ? "ok" : "quiet";
         const bar2=$("micbar"); if(bar2) bar2.style.width="0%";
         paintDiag();
@@ -1100,6 +1132,7 @@ async function diagMic(){
 /* Same four and a half seconds, same meter, read from the bridge. This is the test that
    answers whether the microphone hears her at all, which getUserMedia cannot ask here. */
 function diagMicNative(){
+  const g=diagGen;
   return new Promise(done=>{
     levelHit = v=>{
       if(v<0){ DIAG.mic="denied"; DIAG.micErr="native-failed"; levelHit=null; paintDiag(); done(); return; }
@@ -1110,6 +1143,7 @@ function diagMicNative(){
     try{ started=NB.levelStart(); }catch(e){}
     if(!started){ DIAG.mic="denied"; DIAG.micErr="native-refused"; levelHit=null; paintDiag(); done(); return; }
     setTimeout(()=>{
+      if(g!==diagGen){ done(); return; }        // stopped already, and her session may own the mic now
       try{ NB.levelStop(); }catch(e){}
       levelHit=null;
       if(DIAG.mic==="testing") DIAG.mic = DIAG.peak>0.045 ? "ok" : "quiet";
@@ -1149,7 +1183,9 @@ function diagListen(l){
     paintDiag();
   });
   if(!started){ d.asr="unavailable"; paintDiag(); return; }
+  const g=diagGen;
   setTimeout(()=>{
+    if(g!==diagGen) return;                     // stopped already; this unlisten would be hers
     unlisten();
     if(d.asr==="listening"){ d.asr = d.err ? "failed" : (d.opened ? "silent" : "never-opened"); paintDiag(); }
   },9000);
@@ -1367,15 +1403,21 @@ $("dlg").addEventListener("close",()=>{
     S.plan=good; saveState(); toast(good.length+" cards loaded");
   }catch(e){ toast("that wasn't a card list"); }
 });
-$("reset").onclick=async()=>{ S=JSON.parse(JSON.stringify(BLANK)); if(NB){try{NB.prefClear()}catch(e){}} try{ for(const k of Object.keys(localStorage)) if(k.startsWith("em:")) localStorage.removeItem(k); }catch(e){} VOICE={}; await saveState(); paintParent(); toast("cleared"); };
+/* One tap used to erase every day of progress and every word you recorded, with nothing
+   to undo it, on a panel a child can reach by holding the corner. It now asks, with the
+   real button somewhere else, and the question goes away on its own. */
+let resetAskT=null;
+$("reset").onclick=()=>{
+  $("resetAsk").classList.remove("hide");
+  clearTimeout(resetAskT); resetAskT=setTimeout(()=>$("resetAsk").classList.add("hide"),6000);
+};
+$("resetYes").onclick=async()=>{ clearTimeout(resetAskT); $("resetAsk").classList.add("hide"); S=JSON.parse(JSON.stringify(BLANK)); if(NB){try{NB.prefClear()}catch(e){}} try{ for(const k of Object.keys(localStorage)) if(k.startsWith("em:")) localStorage.removeItem(k); }catch(e){} VOICE={}; await saveState(); paintParent(); toast("cleared"); };
 
 /* ══ start ══ */
 (async function(){
   await boot();
   fillSelects();
-  $("hands").style.display="none";
-  $("picture").textContent="👶";
-  $("moon").classList.remove("on");
+  restScreen();
   openParent();
 })();
 </script>

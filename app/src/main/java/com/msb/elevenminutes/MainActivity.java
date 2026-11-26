@@ -200,6 +200,16 @@ public class MainActivity extends AppCompatActivity {
         if (web != null) web.evaluateJavascript("window.__standDown && window.__standDown()", null);
     }
 
+    /* The way back. The page also listens for focus and visibility, but whether a WebView
+       fires those when its activity returns is up to the WebView, and onPause() above has
+       already stopped the card. Without a resume she comes back to a picture that no longer
+       does anything. resume() does nothing if there is no card to go back to, or if the
+       grown-up panel is open. */
+    @Override protected void onResume() {
+        super.onResume();
+        if (web != null) web.evaluateJavascript("window.__resume && window.__resume()", null);
+    }
+
     @Override protected void onDestroy() {
         if (bridge != null) bridge.release();
         if (web != null) { web.destroy(); web = null; }
