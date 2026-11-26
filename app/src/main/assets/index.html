@@ -58,6 +58,9 @@ body{font-family:var(--display);background:var(--night);color:var(--ink);-webkit
 #moon{position:absolute;font-size:min(28vh,34vw);opacity:0;transition:opacity 1.2s ease;pointer-events:none}
 #moon.on{opacity:.9;animation:float 7s ease-in-out infinite}
 @keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-16px)}}
+/* A tap on the moon: a small hop, in place of the float for a moment. */
+#moon.on.nod{animation:nod .6s cubic-bezier(.2,1.6,.35,1)}
+@keyframes nod{0%{transform:translateY(0) scale(1)}40%{transform:translateY(-22px) scale(1.08)}100%{transform:translateY(0) scale(1)}}
 
 /* the only two controls she can reach, and they carry no words */
 #hands{position:absolute;left:0;right:0;bottom:0;display:flex;gap:0;opacity:.28;transition:opacity .3s}
@@ -721,7 +724,23 @@ $("picture").addEventListener("pointerdown",()=>{       // feedback on touch, no
   const p=$("picture"); p.classList.remove("invite","press"); void p.offsetWidth; p.classList.add("press");
 });
 $("picture").addEventListener("animationend",ev=>{ if(ev.animationName==="press") $("picture").classList.remove("press"); });
+/* The moon is the whole of her screen when there is no session, so she taps it. It used to
+   do nothing at all, which to a three-year-old is a broken toy. Now it hops and says
+   goodnight, in one of today's languages, each in turn. It never opens the microphone and
+   never starts cards: the day still ends when it ends, and a grown-up starts the next one. */
+const GOODNIGHT={en:"good night",es:"buenas noches",ja:"おやすみ",zh:"晚安"};
+let nightTurn=0;
+function moonTap(){
+  const m=$("moon");
+  m.classList.remove("nod"); void m.offsetWidth; m.classList.add("nod");
+  const langs=LK.filter(l=>S.active.includes(l)); if(!langs.length) return;
+  const lang=langs[nightTurn++%langs.length];
+  stopVoice();                                  // a second tap replaces the first, never queues
+  synth({say:GOODNIGHT[lang],lang});
+}
+$("moon").addEventListener("animationend",ev=>{ if(ev.animationName==="nod") $("moon").classList.remove("nod"); });
 $("picture").onclick=()=>{
+  if(ended&&$("moon").classList.contains("on")&&!$("parent").classList.contains("on")) return moonTap();
   const e=queue[idx];
   /* busy: the card is on its way out and queue[idx] is already the next word, so a tap
      here used to say that word over the old picture. The next card plays its own. */
