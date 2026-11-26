@@ -187,8 +187,8 @@ async function openApp({ bridge = false } = {}) {
   const timers = win.__timers;
   const $ = (id) => win.document.getElementById(id);
 
-  /* boot() is async; the baby face is the last thing it paints */
-  await waitFor(() => $('picture') && $('picture').textContent === '\u{1F476}', 'the app to boot');
+  /* boot() is async; opening the grown-up panel is the last thing it does */
+  await waitFor(() => $('parent') && $('parent').classList.contains('on'), 'the app to boot');
 
   const app = {
     win, dom, timers, $,
