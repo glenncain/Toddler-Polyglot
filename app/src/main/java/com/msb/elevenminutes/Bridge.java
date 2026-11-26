@@ -305,17 +305,29 @@ public class Bridge {
                     });
                 }
 
-                @Override public void onPartialResults(Bundle b) { push(b); }
-                @Override public void onResults(Bundle b) { push(b); asrListening = false; }
+                @Override public void onPartialResults(Bundle b) {
+                    String js = heardJs(b);
+                    if (js != null) toJs(js);
+                }
+                /* The recogniser is finished after this: one utterance per listen. Say so,
+                   in the same call as the final guess, so the page can listen again when
+                   the guess was not the word, and never before it has judged that guess. */
+                @Override public void onResults(Bundle b) {
+                    asrListening = false;
+                    cancelWatchdog();
+                    String js = heardJs(b);
+                    toJs((js != null ? js + ";" : "")
+                         + "window.__asrEnd && window.__asrEnd(" + seq + ")");
+                }
 
-                private void push(Bundle b) {
+                private String heardJs(Bundle b) {
                     ArrayList<String> got = b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-                    if (got == null || got.isEmpty()) return;
+                    if (got == null || got.isEmpty()) return null;
                     cancelWatchdog();          // it is alive and talking to us
                     StringBuilder all = new StringBuilder();
                     for (String s : got) all.append(' ').append(s);
-                    toJs("window.__asrHeard && window.__asrHeard(" + q(all.toString())
-                         + "," + seq + ")");
+                    return "window.__asrHeard && window.__asrHeard(" + q(all.toString())
+                         + "," + seq + ")";
                 }
             });
 

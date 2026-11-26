@@ -276,7 +276,7 @@ const ttsAbandon = ()=>{ for(const id of Object.keys(ttsWaiting)) ttsSettle(id, 
 window.__ttsDone = (id, ok)=>ttsSettle(id, !!ok);
 window.__ttsReady = ()=>{ if(NB){ try{ NCAP=JSON.parse(NB.capabilities()); }catch(e){} } };
 window.__micGranted = ()=>{};
-let asrHit = null, asrErr = null, asrOpen = null, asrWant = -1;
+let asrHit = null, asrErr = null, asrOpen = null, asrEnd = null, asrWant = -1;
 /* Results are stamped with the listen that produced them. A recogniser being torn down can
    still push one, and there is only ever one callback slot, so without this an old card's
    transcript gets judged against the word now on screen — and advances it for something she
@@ -298,6 +298,10 @@ window.__asrError = (name, wasOffline, hadMic, retrying, seq)=>{
    nothing" and "it never opened at all" look identical from the page otherwise,
    and they are different faults. */
 window.__asrReady = ()=>{ if(asrOpen) asrOpen(); };
+/* Android's recogniser hears one utterance, hands back its final guess and stops, with no
+   error. Without this the page never learned that a listen had ended, so the first thing she
+   said that was not quite the word shut the ear for the rest of the card. */
+window.__asrEnd = seq=>{ if(seq===asrWant && asrEnd) asrEnd(); };
 
 /* This WebView refuses getUserMedia outright, so on Android the level meter and the
    parent's recordings come from the bridge instead. Absent a bridge — the browser
@@ -609,15 +613,23 @@ function listen(e,hit){
   const stillHers=()=>g===earGen && !ended && !busy && queue[idx]===e;
   if(NB){
     if(!NCAP||!NCAP.asr) return false;
-    let tries=0;
+    let tries=0, ends=0;
     const arm=()=>{
       asrHit = txt=>{ if(stillHers() && heard(txt,e)) hit(); };
       asrErr = ()=>{
         if(!stillHers() || ++tries>6){ $("ear").classList.remove("on"); return; }
         setTimeout(()=>{ if(stillHers()) arm(); }, 250);
       };
+      /* It heard something and it was not the word: listen again. The final guess arrives
+         in the same call, just before this, so a hit has already moved the card on and
+         stillHers() is false. Ends need speech, so they cannot spin the way errors can;
+         the cap is only a backstop, and the card's own 19s still ends it. */
+      asrEnd = ()=>{
+        if(!stillHers() || ++ends>30){ $("ear").classList.remove("on"); return; }
+        setTimeout(()=>{ if(stillHers()) arm(); }, 150);
+      };
       try{ asrWant = NB.startListening(LANGS[e.lang].code); }
-      catch(_){ asrHit=null; asrErr=null; asrWant=-1; }
+      catch(_){ asrHit=null; asrErr=null; asrEnd=null; asrWant=-1; }
     };
     arm();
     return true;
@@ -641,7 +653,7 @@ function listen(e,hit){
 }
 const unlisten=()=>{
   earGen++;
-  if(NB){ asrHit=null; asrErr=null; asrOpen=null; asrWant=-1; try{ NB.stopListening(); }catch(e){} return; }
+  if(NB){ asrHit=null; asrErr=null; asrOpen=null; asrEnd=null; asrWant=-1; try{ NB.stopListening(); }catch(e){} return; }
   try{if(rec)rec.stop()}catch(e){}
 };
 
@@ -1074,7 +1086,7 @@ const TESTWORD=l=>ALL.find(a=>a.obj==="shoe"&&a.lang===l);
 function listenRaw(e,onText){
   if(NB){
     if(!NCAP||!NCAP.asr) return false;
-    asrHit=txt=>onText(txt);
+    asrHit=txt=>onText(txt); asrEnd=null;     // the check listens once; its own timer ends it
     try{ asrWant = NB.startListening(LANGS[e.lang].code); return true; }
     catch(_){ asrHit=null; asrWant=-1; return false; }
   }
