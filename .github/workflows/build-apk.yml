@@ -37,6 +37,13 @@ jobs:
       - name: Run the session teardown tests
         run: npm test
 
+      # The quiet-voice boost is plain Java, so it is measured here on synthetic audio:
+      # a quiet word must come up at least 14 dB, the room must not, nothing may clip.
+      - name: Check the quiet-voice boost
+        run: |
+          javac -d build/qb app/src/main/java/com/msb/elevenminutes/QuietBoost.java test/QuietBoostCheck.java
+          java -cp build/qb QuietBoostCheck
+
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 25

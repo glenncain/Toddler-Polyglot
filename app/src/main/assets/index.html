@@ -1328,13 +1328,31 @@ function earRow(box){
     +(EAR.quietPeaks?" "+EAR.quietPeaks+" listens came in barely above the room: she may be too far away or too quiet.":""),
     pill(worst<=700?"good":(worst<=1500?"warn":"bad"), worst<=700?"quick":(worst<=1500?"slow":"very slow"))));
 }
+/* The quiet-voice boost lives in the bridge (Android 13 and up). Off unless you turn it on
+   here, because whether this tablet's recogniser accepts audio handed to it is something
+   only the tablet can answer: run the per-language listening test below with it on, from
+   where she sits, at her volume. */
+function boostRow(box){
+  if(!NB||typeof NB.micBoost!=="function") return;
+  let st="off"; try{ st=NB.micBoost(); }catch(e){}
+  if(st==="unsupported") return;
+  const b=document.createElement("button"); b.className="tiny"; b.id="boostBtn";
+  b.textContent = st==="on" ? "on" : "off"; b.title="Quiet-voice boost";
+  b.onclick=()=>{ try{ NB.setMicBoost(st!=="on"); }catch(e){} paintDiag(); };
+  const r=line("Quiet-voice boost",
+    st==="failed" ? "This tablet's recogniser would not take the boosted audio, so it went back to its own microphone for now. Turn it on again to retry."
+    : st==="on" ? "On. Quiet speech is lifted by up to 18 dB before the recogniser hears it; the room is left alone."
+    : "Off. Turn it on if she speaks softly or sits back from the tablet, then run a listening test.",
+    pill(st==="on"?"good":(st==="failed"?"bad":""), st));
+  r.appendChild(b); box.appendChild(r);
+}
 function paintDiag(){
   const box=$("diagRows"); if(!box) return;
   box.innerHTML="";
   if(!DIAG.ran){
     $("diagHd").textContent="Not run yet";
     box.appendChild(line("Nothing measured","Press Run the check. It takes about five seconds, then two taps per language.",null));
-    earRow(box);
+    earRow(box); boostRow(box);
     return;
   }
   $("diagHd").textContent = NB
@@ -1364,7 +1382,7 @@ function paintDiag(){
              : "Absent. She can still use the app; you press ✓ when she says the word.",
     pill(DIAG.asr?"good":"warn", DIAG.asr?"present":"missing")));
 
-  earRow(box);
+  earRow(box); boostRow(box);
 
   if(NB && DIAG.recog){
     const r=DIAG.recog, who=r.package&&r.package!=="?" ? r.package : "an unnamed app";

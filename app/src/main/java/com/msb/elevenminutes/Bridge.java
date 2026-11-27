@@ -11,6 +11,9 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.ParcelFileDescriptor;
+import android.system.Os;
+import android.system.OsConstants;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
@@ -75,6 +78,22 @@ public class Bridge {
     private static final long IDLE_MS = 1500;          // an idle recogniser nobody asked again
     private static final long END_SILENCE_MS = 1500;   // her pauses, inside one word
     private static final long LEVEL_EVERY_MS = 90;     // ring updates from her voice
+
+    /* Quiet-voice boost (Android 13+, off unless the grown-up turns it on). The recogniser
+       normally records the microphone itself, flat and without gain. With this on, the app
+       records instead, lifts a quiet voice with QuietBoost, and hands the recogniser that
+       audio through EXTRA_AUDIO_SOURCE. If this tablet's recogniser will not take audio
+       that way, the first failed listen turns it off for the launch and the next listen
+       goes back to the recogniser's own microphone. */
+    private static final String BOOST_KEY = "em:mic-boost";
+    private static final int BOOST_RATE = 16000;
+    private Boolean boostWanted = null;
+    private boolean boostDead = false;
+    private boolean asrBoosted = false;
+    private QuietBoost boost;                      // one per launch: it learns the room once
+    private java.util.concurrent.atomic.AtomicBoolean boostFlag;   // the running capture's own stop flag
+    private Thread boostThread;
+    private ParcelFileDescriptor boostRead;
 
     private Thread levelThread;
     private volatile boolean levelRun = false;
@@ -303,6 +322,17 @@ public class Bridge {
             if (preferOffline && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 i.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true);
             }
+            asrBoosted = false;
+            if (Build.VERSION.SDK_INT >= 33 && boostOn()) {
+                ParcelFileDescriptor src = boostStart(seq);
+                if (src != null) {
+                    i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, src);
+                    i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1);
+                    i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT);
+                    i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, BOOST_RATE);
+                    asrBoosted = true;
+                }
+            }
             asr.startListening(i);
             asrListening = true;
             cancelWatchdog();
@@ -340,7 +370,7 @@ public class Bridge {
             }
             @Override public void onRmsChanged(float v) {
                 long now = System.currentTimeMillis();
-                if (now - lastLevelAt < LEVEL_EVERY_MS || !live()) return;
+                if (asrBoosted || now - lastLevelAt < LEVEL_EVERY_MS || !live()) return;
                 lastLevelAt = now;
                 toJs("window.__asrLevel && window.__asrLevel(" + Math.round(v * 10f) / 10f + "," + seq + ")");
             }
@@ -352,6 +382,8 @@ public class Bridge {
                 if (!live()) return;
                 asrListening = false;
                 cancelWatchdog();
+                boostStop();
+                if (asrBoosted && !asrOpened && !noOfflineModel(e)) boostDead = true;   // it will not take our audio
                 final boolean wasOffline = asrOffline;
                 final boolean hadMic = asrOpened;
                 final String lang = asrLang;
@@ -397,6 +429,7 @@ public class Bridge {
                 if (!live()) return;
                 asrListening = false;
                 cancelWatchdog();
+                boostStop();
                 idleFor(seq);
                 String js = heardJs(b);
                 toJs((js != null ? js + ";" : "")
@@ -454,6 +487,124 @@ public class Bridge {
         }
     }
 
+    private boolean boostOn() {
+        if (boostDead) return false;
+        if (boostWanted == null) boostWanted = "1".equals(prefGet(BOOST_KEY));
+        return boostWanted;
+    }
+
+    @JavascriptInterface
+    public void setMicBoost(boolean on) {
+        boostWanted = on;
+        if (on) boostDead = false;                  // turning it on again is a fresh try
+        try { prefSet(BOOST_KEY, on ? "1" : "0"); } catch (Throwable ignored) {}
+    }
+
+    /** "unsupported" (older than Android 13), "failed" (this launch's recogniser refused it), "on" or "off". */
+    @JavascriptInterface
+    public String micBoost() {
+        if (Build.VERSION.SDK_INT < 33) return "unsupported";
+        if (boostDead) return "failed";
+        if (boostWanted == null) boostWanted = "1".equals(prefGet(BOOST_KEY));
+        return boostWanted ? "on" : "off";
+    }
+
+    /* Opens the microphone, and a pipe the recogniser reads from. Returns the read end, or
+       null if any of it failed, in which case the listen goes ahead without the boost. A
+       write only happens when poll() says the pipe has room for it (each write is 1280
+       bytes, under PIPE_BUF, so it cannot block part-way): if the recogniser stops reading,
+       audio is dropped rather than the thread stalling with the microphone open. */
+    private ParcelFileDescriptor boostStart(final int seq) {
+        boostStop();
+        AudioRecord r = null;
+        ParcelFileDescriptor[] pipe = null;
+        try {
+            if (act.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                    != PackageManager.PERMISSION_GRANTED) return null;
+            int min = AudioRecord.getMinBufferSize(BOOST_RATE, AudioFormat.CHANNEL_IN_MONO,
+                                                   AudioFormat.ENCODING_PCM_16BIT);
+            if (min <= 0) return null;
+            r = new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, BOOST_RATE,
+                                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
+                                Math.max(min * 2, BOOST_RATE / 5 * 2));
+            if (r.getState() != AudioRecord.STATE_INITIALIZED) { r.release(); return null; }
+            pipe = ParcelFileDescriptor.createPipe();
+            final java.io.FileDescriptor out = pipe[1].getFileDescriptor();
+            r.startRecording();
+            if (r.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) {
+                r.release(); pipe[0].close(); pipe[1].close(); return null;
+            }
+            if (boost == null) boost = QuietBoost.forSpeech(BOOST_RATE);
+            final AudioRecord rec = r;
+            final ParcelFileDescriptor writeEnd = pipe[1];
+            final QuietBoost qb = boost;
+            final java.util.concurrent.atomic.AtomicBoolean run = new java.util.concurrent.atomic.AtomicBoolean(true);
+            boostFlag = run;
+            boostThread = new Thread(() -> {
+                android.system.StructPollfd[] room = { new android.system.StructPollfd() };
+                room[0].fd = out;
+                room[0].events = (short) OsConstants.POLLOUT;
+                short[] buf = new short[BOOST_RATE / 25];         // 40ms
+                byte[] bytes = new byte[buf.length * 2];
+                long lastLevel = 0L;
+                try {
+                    while (run.get()) {
+                        int got = rec.read(buf, 0, buf.length);
+                        if (got <= 0) { if (got < 0) break; continue; }
+                        qb.process(buf, got);
+                        double sum = 0;
+                        for (int k = 0; k < got; k++) {
+                            short v = buf[k];
+                            bytes[2 * k] = (byte) (v & 0xff);             // little-endian PCM
+                            bytes[2 * k + 1] = (byte) ((v >> 8) & 0xff);
+                            sum += (double) v * v;
+                        }
+                        room[0].revents = 0;
+                        if (Os.poll(room, 0) > 0) {
+                            if ((room[0].revents & (OsConstants.POLLERR | OsConstants.POLLHUP)) != 0) break;   // reader gone
+                            if ((room[0].revents & OsConstants.POLLOUT) != 0) Os.write(out, bytes, 0, got * 2);
+                        }                                             // else: full, drop this 40ms
+                        long now = System.currentTimeMillis();
+                        if (now - lastLevel >= LEVEL_EVERY_MS) {
+                            lastLevel = now;
+                            // on the recogniser's own rough scale: -60 dBFS is -2, -10 dBFS is 8
+                            double dbfs = 20 * Math.log10(Math.max(Math.sqrt(sum / got) / 32768.0, 1e-6));
+                            double v = Math.round(((dbfs + 60) / 5 - 2) * 10) / 10.0;
+                            toJs("window.__asrLevel && window.__asrLevel(" + v + "," + seq + ")");
+                        }
+                    }
+                } catch (Throwable ignored) {
+                } finally {
+                    try { rec.stop(); } catch (Throwable ignored) {}
+                    try { rec.release(); } catch (Throwable ignored) {}
+                    try { writeEnd.close(); } catch (Throwable ignored) {}   // end of audio for the recogniser
+                    micFreeAt = System.currentTimeMillis() + SETTLE_MS;
+                }
+            }, "mic-boost");
+            boostThread.start();
+            boostRead = pipe[0];
+            return pipe[0];
+        } catch (Throwable t) {
+            try { if (r != null) r.release(); } catch (Throwable ignored) {}
+            try { if (pipe != null) { pipe[0].close(); pipe[1].close(); } } catch (Throwable ignored) {}
+            return null;
+        }
+    }
+
+    /* The microphone the boost holds is released here, within one 40ms read. Called at the
+       end of every listen, on every stop, and whenever the recogniser is released. */
+    private void boostStop() {
+        java.util.concurrent.atomic.AtomicBoolean run = boostFlag;
+        boostFlag = null;
+        if (run != null) run.set(false);
+        Thread t = boostThread;
+        boostThread = null;
+        if (t != null) { try { t.join(150); } catch (Throwable ignored) {} }
+        ParcelFileDescriptor rd = boostRead;
+        boostRead = null;
+        if (rd != null) { try { rd.close(); } catch (Throwable ignored) {} }
+    }
+
     /* Whether a language has an on-device model is a fact about the tablet, not about
        this launch. Keeping it in memory only meant every session paid the doomed offline
        attempt again on every language — a second or two of her standing there saying a
@@ -492,6 +643,7 @@ public class Bridge {
     private void releaseAsr() {
         cancelWatchdog();
         cancelIdle();
+        boostStop();
         boolean had = (asr != null);
         try { if (asr != null) { asr.cancel(); asr.destroy(); } } catch (Throwable ignored) {}
         asr = null;

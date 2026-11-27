@@ -135,3 +135,25 @@ test('browser build: the ring waits for the recogniser to start hearing audio', 
   rec.onspeechstart();
   assert.ok(ear(app).contains('hearing'), 'speechstart did not show she is being heard');
 });
+
+test('Android build: the grown-up can turn the quiet-voice boost on and off, and it is remembered', async (t) => {
+  const app = await openApp({ bridge: true });
+  t.after(() => app.close());
+
+  app.win.eval('paintDiag()');
+  const btn = () => app.$('boostBtn');
+  assert.ok(btn(), 'no quiet-voice boost control in the panel');
+  assert.strictEqual(btn().textContent, 'off', 'the boost must start off');
+  btn().click();
+  assert.strictEqual(btn().textContent, 'on');
+  assert.strictEqual(app.win.AndroidBridge.prefGet('em:mic-boost'), '1', 'the choice was not saved');
+  btn().click();
+  assert.strictEqual(btn().textContent, 'off');
+});
+
+test('browser build: no boost control, because there is no bridge to boost', async (t) => {
+  const app = await openApp({ bridge: false });
+  t.after(() => app.close());
+  app.win.eval('paintDiag()');
+  assert.ok(!app.$('boostBtn'), 'the browser build offered a boost it cannot do');
+});
