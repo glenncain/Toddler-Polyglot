@@ -122,6 +122,8 @@ function installBridge(win) {
     starts: 0,
     stops: 0,
     get open() { return open.on; },
+    /* the recogniser finished one utterance and let go of the microphone by itself */
+    ended() { open.on = false; },
   };
 
   win.AndroidBridge = {
