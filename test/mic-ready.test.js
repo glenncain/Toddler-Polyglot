@@ -157,3 +157,15 @@ test('browser build: no boost control, because there is no bridge to boost', asy
   app.win.eval('paintDiag()');
   assert.ok(!app.$('boostBtn'), 'the browser build offered a boost it cannot do');
 });
+
+test('Android build: saying the word again rebuilds the recogniser while the word plays', async (t) => {
+  const app = await openApp({ bridge: true });
+  t.after(() => app.close());
+
+  await intoTheMiddleOfACard(app, 'listening');
+  const before = app.tts.prepared.length;
+  app.$('picture').click();                          // she taps: the ear shuts, the word plays again
+  await waitFor(() => app.tts.speaking, 'the repeat');
+  assert.ok(app.tts.prepared.length > before, 'the recogniser was left to be built after the word');
+  assert.ok(!app.asr.open, 'the microphone was open while the tablet spoke');
+});

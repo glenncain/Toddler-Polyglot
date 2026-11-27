@@ -790,6 +790,8 @@ function openEar(e){
    never once said out loud. */
 async function replay(e,times){
   unlisten(); EAR.off();
+  /* the stop just destroyed the recogniser; build the next one while the word plays */
+  if(NB&&NB.prepare){ try{ NB.prepare(LANGS[e.lang].code); }catch(_){} }
   if(await say(e,times)) openEar(e);            // cut off by a newer saying: that one opens it
 }
 async function heard0(e){                                              // play, then open the ear
