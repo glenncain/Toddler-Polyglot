@@ -92,8 +92,8 @@ public class Bridge {
     private static final int BOOST_RATE = 16000;
     private volatile Boolean boostWanted = null;
     private volatile boolean boostDead = false;
-    private AudioRecord boostRec;
-    private volatile boolean boostReady = false;   // the recogniser reported ready on this listen                  // so boostStop can unblock a read in progress
+    private AudioRecord boostRec;                  // so boostStop can unblock a read in progress
+    private volatile boolean boostReady = false;   // the recogniser reported ready on this listen
     private boolean asrBoosted = false;
     private QuietBoost boost;                      // one per launch: it learns the room once
     private java.util.concurrent.atomic.AtomicBoolean boostFlag;   // the running capture's own stop flag
@@ -386,10 +386,13 @@ public class Bridge {
                ready, so on a reused recogniser they are dropped until then. */
             private boolean fromThisListen() { return live() && (ready || !reused); }
             private boolean deadlineSet = false;
+            private boolean finished = false;   // this listener's listen has ended, one way or another
 
             /* Reuse refused: tear down, stop reusing for this launch, and start the same listen
                again on a fresh recogniser. The page is not told; to it this is one listen. */
             private void failReuse() {
+                if (finished) return;
+                finished = true;
                 final String lang = asrLang;
                 final boolean wasOffline = asrOffline;
                 asrListening = false;
@@ -437,7 +440,7 @@ public class Bridge {
                        watchdog with her microphone deaf. */
                     if (!deadlineSet) {
                         deadlineSet = true;
-                        ui.postDelayed(() -> { if (live() && !ready && asrListening) failReuse(); }, REUSE_GRACE_MS);
+                        ui.postDelayed(() -> { if (!finished && live() && !ready && asrListening) failReuse(); }, REUSE_GRACE_MS);
                     }
                     return;
                 }
@@ -454,6 +457,7 @@ public class Bridge {
                 /* Verdicts about offline models and the boost are only drawn from fresh
                    recognisers, so any failure before ready on a reused one is a refused reuse. */
                 if (reused && !hadMic) { failReuse(); return; }
+                finished = true;
                 if (asrBoosted && !hadMic && !noOfflineModel(e)) boostDead = true;   // it will not take our audio
                 // let the recogniser finish this callback before it is torn down
                 ui.post(() -> {
@@ -492,6 +496,7 @@ public class Bridge {
                the guess was not the word, and never before it has judged that guess. */
             @Override public void onResults(Bundle b) {
                 if (!fromThisListen()) return;
+                finished = true;
                 asrListening = false;
                 cancelWatchdog();
                 boostStop();
