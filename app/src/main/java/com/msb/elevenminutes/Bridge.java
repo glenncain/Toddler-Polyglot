@@ -76,6 +76,7 @@ public class Bridge {
     private boolean reuseOk = true;
     private boolean asrUsed = false;                   // the current instance has run a listen
     private static final long WARM_IDLE_MS = 8000;     // a warmed recogniser no listen came for
+    private static final long REUSE_GRACE_MS = 1200;   // a reused listen must report ready within this
     private Runnable asrIdle;
     private static final long IDLE_MS = 1500;          // an idle recogniser nobody asked again
     private static final long END_SILENCE_MS = 1500;   // her pauses, inside one word
@@ -91,7 +92,8 @@ public class Bridge {
     private static final int BOOST_RATE = 16000;
     private volatile Boolean boostWanted = null;
     private volatile boolean boostDead = false;
-    private AudioRecord boostRec;                  // so boostStop can unblock a read in progress
+    private AudioRecord boostRec;
+    private volatile boolean boostReady = false;   // the recogniser reported ready on this listen                  // so boostStop can unblock a read in progress
     private boolean asrBoosted = false;
     private QuietBoost boost;                      // one per launch: it learns the room once
     private java.util.concurrent.atomic.AtomicBoolean boostFlag;   // the running capture's own stop flag
@@ -300,7 +302,9 @@ public class Bridge {
        come back once over the network rather than reporting silence. */
     private void begin(final String langTag, final boolean preferOffline, final int seq) {
         if (seq != asrSeq.get()) return;                     // stopped, or replaced by a newer listen
+        cancelIdle();
         if (!asrAvailable()) {
+            releaseAsr();
             toJs("window.__asrError && window.__asrError(\"unavailable\"," + preferOffline
                  + ",false,false," + seq + ")");
             return;
@@ -308,6 +312,7 @@ public class Bridge {
         asrLang = langTag;
         asrOffline = preferOffline;
         asrOpened = false;
+        boostReady = false;
         final boolean reused = (asr != null && asrUsed);
         try {
             if (asr == null) { asr = SpeechRecognizer.createSpeechRecognizer(act); asrUsed = false; }
@@ -349,11 +354,13 @@ public class Bridge {
             cancelWatchdog();
             asrWatchdog = () -> {
                 if (asr == null) return;
-                // a boosted listen that never finishes: this recogniser does not end on our audio
-                if (asrBoosted) boostDead = true;
+                final boolean hadMic = asrOpened;
+                if (reused && !hadMic) reuseOk = false;        // a reused recogniser that never started
+                // a boosted listen that took the mic and never finished: it does not end on our audio
+                else if (asrBoosted) boostDead = true;
                 releaseAsr();
                 toJs("window.__asrError && window.__asrError(\"no-response\","
-                     + preferOffline + ",true,false," + seq + ")");
+                     + preferOffline + "," + hadMic + ",false," + seq + ")");
             };
             ui.postDelayed(asrWatchdog, ASR_MAX_MS);
         } catch (Throwable t) {
@@ -378,11 +385,29 @@ public class Bridge {
                listen's number. None of those can legitimately come before this listen is
                ready, so on a reused recogniser they are dropped until then. */
             private boolean fromThisListen() { return live() && (ready || !reused); }
+            private boolean deadlineSet = false;
+
+            /* Reuse refused: tear down, stop reusing for this launch, and start the same listen
+               again on a fresh recogniser. The page is not told; to it this is one listen. */
+            private void failReuse() {
+                final String lang = asrLang;
+                final boolean wasOffline = asrOffline;
+                asrListening = false;
+                cancelWatchdog();
+                boostStop();
+                reuseOk = false;
+                ui.post(() -> {
+                    if (!live()) return;
+                    releaseAsr();
+                    ui.postDelayed(() -> begin(lang, wasOffline, seq), SETTLE_MS);
+                });
+            }
 
             @Override public void onReadyForSpeech(Bundle b) {
                 if (!live()) return;
                 ready = true;
                 asrOpened = true;
+                boostReady = true;
                 toJs("window.__asrReady && window.__asrReady(" + preferOffline + "," + seq + ")");
             }
             /* The ring on her screen follows her voice, so she can see that it is listening
@@ -405,7 +430,17 @@ public class Bridge {
                 if (!live()) return;
                 // a reused recogniser's late no-match or timeout belongs to the previous listen
                 if (reused && !ready && (e == SpeechRecognizer.ERROR_NO_MATCH
-                                      || e == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)) return;
+                                      || e == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)) {
+                    /* ...or it is this listen failing straight away, which is how a re-armed
+                       recogniser often refuses. Give this listen a moment to report ready; if
+                       it does not, treat it as a refused reuse rather than wait out the
+                       watchdog with her microphone deaf. */
+                    if (!deadlineSet) {
+                        deadlineSet = true;
+                        ui.postDelayed(() -> { if (live() && !ready && asrListening) failReuse(); }, REUSE_GRACE_MS);
+                    }
+                    return;
+                }
                 asrListening = false;
                 cancelWatchdog();
                 boostStop();
@@ -416,16 +451,9 @@ public class Bridge {
                    go while it sat idle) is not evidence about offline models or the boost. It
                    is torn down, reuse is turned off for this launch, and the same listen starts
                    again on a fresh one, quietly: the page never hears about it. */
-                final boolean reuseFail = reused && !hadMic && (e == SpeechRecognizer.ERROR_RECOGNIZER_BUSY
-                                       || e == SpeechRecognizer.ERROR_CLIENT || e == 11);
-                if (reuseFail) {
-                    reuseOk = false;
-                    ui.post(() -> {
-                        releaseAsr();
-                        ui.postDelayed(() -> begin(lang, wasOffline, seq), SETTLE_MS);
-                    });
-                    return;
-                }
+                /* Verdicts about offline models and the boost are only drawn from fresh
+                   recognisers, so any failure before ready on a reused one is a refused reuse. */
+                if (reused && !hadMic) { failReuse(); return; }
                 if (asrBoosted && !hadMic && !noOfflineModel(e)) boostDead = true;   // it will not take our audio
                 // let the recogniser finish this callback before it is torn down
                 ui.post(() -> {
@@ -616,7 +644,9 @@ public class Bridge {
                            captures at once can leave one of them hearing silence, so stop ours,
                            and stop offering the boost for this launch. */
                         starved = wrote ? 0 : starved + 1;
-                        if (starved > 25) { boostDead = true; break; }
+                        /* After ready, a full pipe can just mean it has stopped reading at the end of
+                           her speech while it works out the result; that is not a verdict. */
+                        if (starved > 25) { if (!boostReady) boostDead = true; break; }
                         long now = System.currentTimeMillis();
                         if (now - lastLevel >= LEVEL_EVERY_MS) {
                             lastLevel = now;
