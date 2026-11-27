@@ -8,11 +8,13 @@ package com.msb.elevenminutes;
  * from the tablet. A three-year-old across the table, half-whispering, arrives tens of dB
  * below that and the recogniser decides nobody spoke.
  *
- * This lifts speech towards a target level, and leaves the room alone:
+ * This lifts speech towards a target level, and leaves the room alone. It cannot pull a
+ * voice out from under a TV: gain lifts the noise with it. It helps a voice that is clean
+ * but small.
  *   - an envelope follower (fast up, slow down) tracks how loud the input is right now;
- *   - a noise floor follows the quietest the room gets, so the hum of a fridge is never
- *     treated as a voice to be boosted (a boosted room keeps a recogniser from ever
- *     deciding she has finished speaking);
+ *   - a short average (25ms) is compared with a noise floor that follows the quietest the
+ *     room gets, so the hum of a fridge is never treated as a voice to be boosted (a
+ *     boosted room keeps a recogniser from ever deciding she has finished speaking);
  *   - only input clearly above that floor gets gain, capped at maxGainDb;
  *   - a soft limiter keeps anything that was already loud from clipping.
  *
@@ -23,13 +25,14 @@ public final class QuietBoost {
 
     private final float maxGain;
     private final float target;
-    private final float attack, release, floorRise, floorLearn, gainStep;
+    private final float attack, release, floorRise, floorLearn, gainStep, average;
     private final int learnFor;      // samples spent learning the room before any gain
     private int seen = 0;
-    private static final float GATE = 2.0f;        // input must be about 6 dB over the room
+    private static final float GATE = 1.8f;        // input must be about 5 dB over the room
     private static final float KNEE = 0.80f;       // where the limiter starts to bend
 
-    private float env = 0f;
+    private float env = 0f;          // peak-following: how loud, for the gain
+    private float lvl = 0f;          // a short average: is this a voice or the room, for the gate
     private float floor = -1f;
     private float gain = 1f;
 
@@ -42,6 +45,7 @@ public final class QuietBoost {
         this.floorLearn = coef(0.05, sampleRate);
         this.learnFor = sampleRate / 4;
         this.gainStep = coef(0.030, sampleRate);
+        this.average = coef(0.025, sampleRate);
     }
 
     /** The defaults the bridge uses: up to +18 dB, speech brought towards -14 dBFS peaks. */
@@ -62,6 +66,7 @@ public final class QuietBoost {
             float x = buf[i] / 32768f;
             float a = Math.abs(x);
             env += (a - env) * (a > env ? attack : release);
+            lvl += (a - lvl) * average;
 
             /* The room, at its quietest. For the first quarter second it is learned quickly
                and nothing is boosted; after that it can only creep up, so a voice cannot
@@ -69,12 +74,12 @@ public final class QuietBoost {
                room is learned once, not at the start of every listen. */
             boolean learning = seen < learnFor;
             if (learning) seen++;
-            if (floor < 0f) floor = env;
-            else if (env < floor) floor = env;
-            else floor += (env - floor) * (learning ? floorLearn : floorRise);
+            if (floor < 0f) floor = lvl;
+            else if (lvl < floor) floor = lvl;
+            else floor += (lvl - floor) * (learning ? floorLearn : floorRise);
 
             float want = 1f;
-            if (!learning && env > floor * GATE && env > 1e-4f) {
+            if (!learning && lvl > floor * GATE && env > 1e-4f) {
                 want = target / env;
                 if (want > maxGain) want = maxGain;
                 if (want < 1f) want = 1f;                          // never turns anything down

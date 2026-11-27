@@ -7,10 +7,11 @@ import java.util.Random;
      javac -d build/qb app/src/main/java/com/msb/elevenminutes/QuietBoost.java test/QuietBoostCheck.java
      java -cp build/qb QuietBoostCheck
 
-   The audio: a quiet room (white noise at -60 dBFS RMS), a quiet child's word (a voiced
-   220 Hz tone with harmonics and two syllables, peaking at -36 dBFS), the room again, then
-   an adult speaking normally (peaking at -6 dBFS), then the room. Exits non-zero if the
-   boost does not lift the quiet word, lifts the room, or clips the loud one. */
+   The audio, twice (a quiet room at -60 dBFS RMS with a soft child peaking at -36 dBFS;
+   a TV-noisy room at -45 dBFS with the child at -30): the room, the child's word (a voiced
+   220 Hz tone with harmonics and two syllables), the room again, then an adult speaking
+   normally (peaking at -6 dBFS), then the room. Exits non-zero if the boost does not lift
+   the quiet word, lifts the room, or clips or turns down the loud one. */
 public class QuietBoostCheck {
     static final int RATE = 16000;
     static final Random RNG = new Random(7);
@@ -44,11 +45,20 @@ public class QuietBoostCheck {
     }
 
     public static void main(String[] args) {
+        /* Gain cannot fix a voice buried in noise, only a quiet one: over a TV the child has to
+           be clearly above it (here 15 dB) for there to be anything worth lifting. */
+        int fail = run(-60, -36, "quiet room, soft child") + run(-45, -30, "TV on, child a little louder");
+        System.out.println(fail == 0 ? "quiet boost: all checks pass" : fail + " check(s) failed");
+        System.exit(fail == 0 ? 0 : 1);
+    }
+
+    static int run(double roomDb, double childDb, String label) {
+        System.out.println("-- " + label + " (room " + (int) roomDb + " dBFS, child peaks " + (int) childDb + " dBFS)");
         int s = RATE;                                   // one second
         int[] cut = { 0, s, s + 3 * s / 4, 3 * s, 3 * s + 3 * s / 4, 5 * s };
         float[] a = new float[cut[5]];
-        noise(a, 0, a.length, -60);
-        word(a, cut[1], cut[2], -36);                   // the quiet child
+        noise(a, 0, a.length, roomDb);
+        word(a, cut[1], cut[2], childDb);               // the quiet child
         word(a, cut[3], cut[4], -6);                    // the adult
 
         short[] in = new short[a.length];
@@ -81,12 +91,12 @@ public class QuietBoostCheck {
         System.out.printf("loud word: %.1f dBFS in, %.1f dBFS out%n", db(loudIn), db(loudOut));
 
         int fail = 0;
-        if (lift < 14) { System.out.println("FAIL: the quiet word was lifted less than 14 dB"); fail++; }
+        double needLift = roomDb <= -55 ? 14 : 6;        // over a TV there is less room to lift
+        if (lift < needLift) { System.out.println("FAIL: the quiet word was lifted less than " + needLift + " dB"); fail++; }
         if (roomLift > 3) { System.out.println("FAIL: the room was boosted more than 3 dB"); fail++; }
         if (tailLift > 6) { System.out.println("FAIL: the boost did not let go of the room after the word"); fail++; }
         if (loudOut > 0.995) { System.out.println("FAIL: the loud word clipped"); fail++; }
         if (db(loudOut) < db(loudIn) - 1.5) { System.out.println("FAIL: the loud word was turned down"); fail++; }
-        System.out.println(fail == 0 ? "quiet boost: all checks pass" : fail + " check(s) failed");
-        System.exit(fail == 0 ? 0 : 1);
+        return fail;
     }
 }
