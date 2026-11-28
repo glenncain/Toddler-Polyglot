@@ -11,6 +11,9 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.ParcelFileDescriptor;
+import android.system.Os;
+import android.system.OsConstants;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
@@ -58,7 +61,7 @@ public class Bridge {
        otherwise be handed to the card now on screen and judged against its word — which
        advances it for something she never said. The page ignores anything not stamped with
        the listen it asked for. */
-    private int asrSeq = 0;
+    private final java.util.concurrent.atomic.AtomicInteger asrSeq = new java.util.concurrent.atomic.AtomicInteger();
     private final Map<String, Boolean> offlineOk = new HashMap<>();
     private static final String OFFLINE_KEY = "em:asr-offline:";
 
@@ -67,6 +70,35 @@ public class Bridge {
        just be standing in front of a card that never advances. */
     private static final long ASR_MAX_MS = 8000;   // under the panel's own 9s, so this verdict wins
     private Runnable asrWatchdog;
+
+    /* Re-arming the same recogniser instead of building a new one. Turned off for the rest
+       of the launch if this tablet's recogniser refuses to be reused. */
+    private boolean reuseOk = true;
+    private boolean asrUsed = false;                   // the current instance has run a listen
+    private static final long WARM_IDLE_MS = 8000;     // a warmed recogniser no listen came for
+    private static final long REUSE_GRACE_MS = 1200;   // a reused listen must report ready within this
+    private Runnable asrIdle;
+    private static final long IDLE_MS = 1500;          // an idle recogniser nobody asked again
+    private static final long END_SILENCE_MS = 1500;   // her pauses, inside one word
+    private static final long LEVEL_EVERY_MS = 90;     // ring updates from her voice
+
+    /* Quiet-voice boost (Android 13+, off unless the grown-up turns it on). The recogniser
+       normally records the microphone itself, flat and without gain. With this on, the app
+       records instead, lifts a quiet voice with QuietBoost, and hands the recogniser that
+       audio through EXTRA_AUDIO_SOURCE. If this tablet's recogniser will not take audio
+       that way, the first failed listen turns it off for the launch and the next listen
+       goes back to the recogniser's own microphone. */
+    private static final String BOOST_KEY = "em:mic-boost";
+    private static final int BOOST_RATE = 16000;
+    private volatile Boolean boostWanted = null;
+    private volatile boolean boostDead = false;
+    private AudioRecord boostRec;                  // so boostStop can unblock a read in progress
+    private volatile boolean boostReady = false;   // the recogniser reported ready on this listen
+    private boolean asrBoosted = false;
+    private QuietBoost boost;                      // one per launch: it learns the room once
+    private java.util.concurrent.atomic.AtomicBoolean boostFlag;   // the running capture's own stop flag
+    private Thread boostThread;
+    private ParcelFileDescriptor boostRead;
 
     private Thread levelThread;
     private volatile boolean levelRun = false;
@@ -77,7 +109,12 @@ public class Bridge {
        call returns — the recognition service it was bound to lets go a moment later.
        Anything else that wants the mic, getUserMedia above all, has to wait that out. */
     private static final long SETTLE_MS = 350;
-    private long micFreeAt = 0L;
+    private volatile long micFreeAt = 0L;
+    /* When a recogniser finishes a listen and is kept for reuse, the recognition service is
+       still letting go of the microphone. That matters to the app's own capture (the level
+       meter, recordings, getUserMedia), not to the same recogniser being asked again, so it
+       is kept apart from micFreeAt, which the next listen waits on. */
+    private volatile long peerFreeAt = 0L;
 
     public Bridge(Activity act, WebView web) {
         this.act = act;
@@ -183,6 +220,7 @@ public class Bridge {
     @JavascriptInterface
     public void prepare(final String langTag) {
         ui.post(() -> {
+            warmRecogniser();
             if (!ttsReady || tts == null) return;
             try { tts.setLanguage(locale(langTag)); } catch (Throwable ignored) {}
         });
@@ -237,13 +275,20 @@ public class Bridge {
     /** Returns the number this listen is stamped with; the page matches results against it. */
     @JavascriptInterface
     public synchronized int startListening(final String langTag) {
-        final int seq = ++asrSeq;
+        final int seq = asrSeq.incrementAndGet();
         ui.post(() -> {
-            releaseAsr();
+            cancelIdle();
+            /* A recogniser that has finished a listen (it heard a guess, or heard nothing) and
+               is sitting idle can simply be asked again. Destroying it and building a new one
+               used to cost the SETTLE_MS handover plus a fresh bind to the recognition
+               service on every re-arm: about a second of a deaf microphone after every guess
+               that was not quite the word, which is exactly when she says it again. */
+            boolean reuse = asr != null && !asrListening && reuseOk;
+            if (!reuse) releaseAsr();
             // once a language is known to have no on-device model, stop splitting her
             // speaking window between a doomed offline attempt and the retry
             final boolean tryOffline = offlineWorthTrying(langTag);
-            long wait = micBusyFor();
+            long wait = listenWait();
             if (wait > 0) ui.postDelayed(() -> begin(langTag, tryOffline, seq), wait);
             else begin(langTag, tryOffline, seq);
         });
@@ -256,8 +301,10 @@ public class Bridge {
        offline first, and if the answer is one of the "no on-device model" failures,
        come back once over the network rather than reporting silence. */
     private void begin(final String langTag, final boolean preferOffline, final int seq) {
-        synchronized (this) { if (seq != asrSeq) return; }   // stopped, or replaced by a newer listen
+        if (seq != asrSeq.get()) return;                     // stopped, or replaced by a newer listen
+        cancelIdle();
         if (!asrAvailable()) {
+            releaseAsr();
             toJs("window.__asrError && window.__asrError(\"unavailable\"," + preferOffline
                  + ",false,false," + seq + ")");
             return;
@@ -265,71 +312,15 @@ public class Bridge {
         asrLang = langTag;
         asrOffline = preferOffline;
         asrOpened = false;
+        boostReady = false;
+        final boolean reused = (asr != null && asrUsed);
         try {
-            asr = SpeechRecognizer.createSpeechRecognizer(act);
-            asr.setRecognitionListener(new RecognitionListener() {
-                @Override public void onReadyForSpeech(Bundle b) {
-                    asrOpened = true;
-                    toJs("window.__asrReady && window.__asrReady(" + preferOffline + ")");
-                }
-                @Override public void onBeginningOfSpeech() {}
-                @Override public void onRmsChanged(float v) {}
-                @Override public void onBufferReceived(byte[] b) {}
-                @Override public void onEndOfSpeech() {}
-                @Override public void onEvent(int a, Bundle b) {}
-
-                @Override public void onError(int e) {
-                    asrListening = false;
-                    final boolean wasOffline = asrOffline;
-                    final boolean hadMic = asrOpened;
-                    final String lang = asrLang;
-                    // let the recogniser finish this callback before it is torn down
-                    ui.post(() -> {
-                        releaseAsr();
-                        /* Retrying over the network only makes sense when the offline
-                           attempt never got off the ground. An offline attempt that took
-                           the microphone and came back with no-match genuinely heard
-                           nothing it recognised — running it again online just costs her
-                           another four seconds of standing there. */
-                        boolean noModel = !hadMic || noOfflineModel(e);
-                        boolean retrying = wasOffline && noModel && lang != null;
-                        // tell the page, so the panel does not sit on "listening" waiting
-                        // for an attempt that is never coming
-                        toJs("window.__asrError && window.__asrError(" + q(errName(e)) + ","
-                             + wasOffline + "," + hadMic + "," + retrying + "," + seq + ")");
-                        if (retrying) {
-                            markOfflineDead(lang);
-                            // the retry is the same logical listen, so it keeps the number
-                            ui.postDelayed(() -> begin(lang, false, seq), SETTLE_MS);
-                        }
-                    });
-                }
-
-                @Override public void onPartialResults(Bundle b) {
-                    String js = heardJs(b);
-                    if (js != null) toJs(js);
-                }
-                /* The recogniser is finished after this: one utterance per listen. Say so,
-                   in the same call as the final guess, so the page can listen again when
-                   the guess was not the word, and never before it has judged that guess. */
-                @Override public void onResults(Bundle b) {
-                    asrListening = false;
-                    cancelWatchdog();
-                    String js = heardJs(b);
-                    toJs((js != null ? js + ";" : "")
-                         + "window.__asrEnd && window.__asrEnd(" + seq + ")");
-                }
-
-                private String heardJs(Bundle b) {
-                    ArrayList<String> got = b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-                    if (got == null || got.isEmpty()) return null;
-                    cancelWatchdog();          // it is alive and talking to us
-                    StringBuilder all = new StringBuilder();
-                    for (String s : got) all.append(' ').append(s);
-                    return "window.__asrHeard && window.__asrHeard(" + q(all.toString())
-                         + "," + seq + ")";
-                }
-            });
+            if (asr == null) { asr = SpeechRecognizer.createSpeechRecognizer(act); asrUsed = false; }
+            /* A new listener per listen carries this listen's number. It does not stop a late
+               callback from the previous listen arriving here (see fromThisListen), so the
+               service is also told to drop whatever it still had going. */
+            if (reused) { try { asr.cancel(); } catch (Throwable ignored) {} }
+            asr.setRecognitionListener(listenerFor(seq, preferOffline, reused));
 
             Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
             i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
@@ -337,25 +328,382 @@ public class Bridge {
             i.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
             i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5);
             i.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, act.getPackageName());
+            /* A three-year-old pauses: "uh ... dog". The default end-of-speech silence can
+               close the listen on the "uh". These are hints and some recognisers ignore
+               them; a match still lands the moment a partial result contains the word, so
+               a longer tail costs nothing when she gets it right. */
+            i.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, END_SILENCE_MS);
+            i.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, END_SILENCE_MS);
             if (preferOffline && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 i.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true);
             }
+            asrBoosted = false;
+            if (Build.VERSION.SDK_INT >= 33 && boostOn()) {
+                ParcelFileDescriptor src = boostStart(seq);
+                if (src != null) {
+                    i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, src);
+                    i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1);
+                    i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT);
+                    i.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, BOOST_RATE);
+                    asrBoosted = true;
+                }
+            }
             asr.startListening(i);
             asrListening = true;
+            asrUsed = true;
             cancelWatchdog();
             asrWatchdog = () -> {
                 if (asr == null) return;
+                final boolean hadMic = asrOpened;
+                if (reused && !hadMic) reuseOk = false;        // a reused recogniser that never started
+                // a boosted listen that took the mic and never finished: it does not end on our audio
+                else if (asrBoosted) boostDead = true;
                 releaseAsr();
                 toJs("window.__asrError && window.__asrError(\"no-response\","
-                     + preferOffline + ",true,false," + seq + ")");
+                     + preferOffline + "," + hadMic + ",false," + seq + ")");
             };
             ui.postDelayed(asrWatchdog, ASR_MAX_MS);
         } catch (Throwable t) {
             asrListening = false;
+            if (reused) reuseOk = false;
             releaseAsr();
             toJs("window.__asrError && window.__asrError(" + q("start-threw-" + t.getClass().getSimpleName())
                  + "," + preferOffline + ",false,false," + seq + ")");
         }
+    }
+
+    private RecognitionListener listenerFor(final int seq, final boolean preferOffline, final boolean reused) {
+        return new RecognitionListener() {
+            private long lastLevelAt = 0L;
+            private boolean ready = false;   // this listen's recogniser has reported ready
+            /* Only reads the number: every callback lands on the main thread, and the Bridge
+               lock is held by recStart/recStop for hundreds of milliseconds at a time. */
+            private boolean live() { return seq == asrSeq.get(); }
+            /* A reused recogniser has one binder listener for every session, and swapping the
+               Java listener only changes where callbacks go from now on. A late result or
+               no-match from the previous listen can therefore arrive here, stamped with this
+               listen's number. None of those can legitimately come before this listen is
+               ready, so on a reused recogniser they are dropped until then. */
+            private boolean fromThisListen() { return live() && (ready || !reused); }
+            private boolean deadlineSet = false;
+            private boolean finished = false;   // this listener's listen has ended, one way or another
+
+            /* Reuse refused: tear down, stop reusing for this launch, and start the same listen
+               again on a fresh recogniser. The page is not told; to it this is one listen. */
+            private void failReuse() {
+                if (finished) return;
+                finished = true;
+                final String lang = asrLang;
+                final boolean wasOffline = asrOffline;
+                asrListening = false;
+                cancelWatchdog();
+                boostStop();
+                reuseOk = false;
+                ui.post(() -> {
+                    if (!live()) return;
+                    releaseAsr();
+                    ui.postDelayed(() -> begin(lang, wasOffline, seq), SETTLE_MS);
+                });
+            }
+
+            @Override public void onReadyForSpeech(Bundle b) {
+                if (!live()) return;
+                ready = true;
+                asrOpened = true;
+                boostReady = true;
+                toJs("window.__asrReady && window.__asrReady(" + preferOffline + "," + seq + ")");
+            }
+            /* The ring on her screen follows her voice, so she can see that it is listening
+               to her. Throttled: the recogniser reports about every 50ms, and the page only
+               needs enough to move a ring. */
+            @Override public void onBeginningOfSpeech() {
+                if (fromThisListen()) toJs("window.__asrSpeech && window.__asrSpeech(" + seq + ")");
+            }
+            @Override public void onRmsChanged(float v) {
+                long now = System.currentTimeMillis();
+                if (asrBoosted || now - lastLevelAt < LEVEL_EVERY_MS || !fromThisListen()) return;
+                lastLevelAt = now;
+                toJs("window.__asrLevel && window.__asrLevel(" + Math.round(v * 10f) / 10f + "," + seq + ")");
+            }
+            @Override public void onBufferReceived(byte[] b) {}
+            @Override public void onEndOfSpeech() {}
+            @Override public void onEvent(int a, Bundle b) {}
+
+            @Override public void onError(int e) {
+                if (!live()) return;
+                // a reused recogniser's late no-match or timeout belongs to the previous listen
+                if (reused && !ready && (e == SpeechRecognizer.ERROR_NO_MATCH
+                                      || e == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)) {
+                    /* ...or it is this listen failing straight away, which is how a re-armed
+                       recogniser often refuses. Give this listen a moment to report ready; if
+                       it does not, treat it as a refused reuse rather than wait out the
+                       watchdog with her microphone deaf. */
+                    if (!deadlineSet) {
+                        deadlineSet = true;
+                        ui.postDelayed(() -> { if (!finished && live() && !ready && asrListening) failReuse(); }, REUSE_GRACE_MS);
+                    }
+                    return;
+                }
+                asrListening = false;
+                cancelWatchdog();
+                boostStop();
+                final boolean wasOffline = asrOffline;
+                final boolean hadMic = asrOpened;
+                final String lang = asrLang;
+                /* A reused recogniser that refuses to start (busy, client, or its service let
+                   go while it sat idle) is not evidence about offline models or the boost. It
+                   is torn down, reuse is turned off for this launch, and the same listen starts
+                   again on a fresh one, quietly: the page never hears about it. */
+                /* Verdicts about offline models and the boost are only drawn from fresh
+                   recognisers, so any failure before ready on a reused one is a refused reuse. */
+                if (reused && !hadMic) { failReuse(); return; }
+                finished = true;
+                if (asrBoosted && !hadMic && !noOfflineModel(e)) boostDead = true;   // it will not take our audio
+                // let the recogniser finish this callback before it is torn down
+                ui.post(() -> {
+                    /* Retrying over the network only makes sense when the offline
+                       attempt never got off the ground. An offline attempt that took
+                       the microphone and came back with no-match genuinely heard
+                       nothing it recognised — running it again online just costs her
+                       another four seconds of standing there. */
+                    boolean noModel = !hadMic || noOfflineModel(e);
+                    boolean retrying = wasOffline && noModel && lang != null;
+                    /* "Heard nothing" and "heard nothing it knew" leave a healthy recogniser
+                       that can be asked again at once. Anything else is torn down. */
+                    boolean healthy = hadMic && !retrying && reuseOk
+                        && (e == SpeechRecognizer.ERROR_SPEECH_TIMEOUT || e == SpeechRecognizer.ERROR_NO_MATCH);
+                    if (healthy) { idleFor(seq, IDLE_MS); peerFreeAt = System.currentTimeMillis() + SETTLE_MS; }
+                    else releaseAsr();
+                    // tell the page, so the panel does not sit on "listening" waiting
+                    // for an attempt that is never coming
+                    toJs("window.__asrError && window.__asrError(" + q(errName(e)) + ","
+                         + wasOffline + "," + hadMic + "," + retrying + "," + seq + ")");
+                    if (retrying) {
+                        markOfflineDead(lang);
+                        // the retry is the same logical listen, so it keeps the number
+                        ui.postDelayed(() -> begin(lang, false, seq), SETTLE_MS);
+                    }
+                });
+            }
+
+            @Override public void onPartialResults(Bundle b) {
+                if (!fromThisListen()) return;
+                String js = heardJs(b);
+                if (js != null) toJs(js);
+            }
+            /* The recogniser is finished after this: one utterance per listen. Say so,
+               in the same call as the final guess, so the page can listen again when
+               the guess was not the word, and never before it has judged that guess. */
+            @Override public void onResults(Bundle b) {
+                if (!fromThisListen()) return;
+                finished = true;
+                asrListening = false;
+                cancelWatchdog();
+                boostStop();
+                idleFor(seq, IDLE_MS);
+                peerFreeAt = System.currentTimeMillis() + SETTLE_MS;
+                String js = heardJs(b);
+                toJs((js != null ? js + ";" : "")
+                     + "window.__asrEnd && window.__asrEnd(" + seq + ")");
+            }
+
+            private String heardJs(Bundle b) {
+                ArrayList<String> got = b.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                if (got == null || got.isEmpty()) return null;
+                /* It is alive and talking to us: push the watchdog back rather than cancel it,
+                   so a listen that keeps producing partials still has a ceiling. */
+                if (asrWatchdog != null) { ui.removeCallbacks(asrWatchdog); ui.postDelayed(asrWatchdog, ASR_MAX_MS); }
+                StringBuilder all = new StringBuilder();
+                for (String s : got) all.append(' ').append(s);
+                return "window.__asrHeard && window.__asrHeard(" + q(all.toString())
+                     + "," + seq + ")";
+            }
+        };
+    }
+
+    /* A finished recogniser is not holding the microphone, but it is not left lying around
+       either: if the page does not ask again almost at once, it is destroyed. */
+    private void idleFor(final int seq, final long ms) {
+        cancelIdle();
+        asrIdle = () -> {
+            asrIdle = null;
+            if (seq != asrSeq.get()) return;                     // a newer listen owns it
+            if (asr != null && !asrListening) releaseAsr();
+        };
+        ui.postDelayed(asrIdle, ms);
+    }
+
+    private void cancelIdle() {
+        if (asrIdle != null) { ui.removeCallbacks(asrIdle); asrIdle = null; }
+    }
+
+    /* Builds the recogniser while the word is being said, so the first listen after it does
+       not wait for one to be created and bound. Nothing is listening: the microphone only
+       opens in startListening, after the word has finished. */
+    private void warmRecogniser() {
+        if (asr != null || !reuseOk || !asrAvailable()) return;
+        try {
+            asr = SpeechRecognizer.createSpeechRecognizer(act);
+            asrUsed = false;
+            idleFor(asrSeq.get(), WARM_IDLE_MS);       // not kept bound if no listen comes
+            if (Build.VERSION.SDK_INT >= 33) {
+                // asking what it supports makes it bind to the recognition service now
+                Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+                i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+                asr.checkRecognitionSupport(i, act.getMainExecutor(),
+                    new android.speech.RecognitionSupportCallback() {
+                        @Override public void onSupportResult(android.speech.RecognitionSupport r) {}
+                        @Override public void onError(int error) {}
+                    });
+            }
+        } catch (Throwable t) {
+            try { if (asr != null) asr.destroy(); } catch (Throwable ignored) {}
+            asr = null;
+        }
+    }
+
+    private boolean boostOn() {
+        if (boostDead) return false;
+        if (boostWanted == null) boostWanted = "1".equals(prefGet(BOOST_KEY));
+        return boostWanted;
+    }
+
+    @JavascriptInterface
+    public void setMicBoost(boolean on) {
+        boostWanted = on;
+        if (on) boostDead = false;                  // turning it on again is a fresh try
+        try { prefSet(BOOST_KEY, on ? "1" : "0"); } catch (Throwable ignored) {}
+    }
+
+    /** "unsupported" (older than Android 13), "failed" (this launch's recogniser refused it), "on" or "off". */
+    @JavascriptInterface
+    public String micBoost() {
+        if (Build.VERSION.SDK_INT < 33) return "unsupported";
+        if (boostDead) return "failed";
+        if (boostWanted == null) boostWanted = "1".equals(prefGet(BOOST_KEY));
+        return boostWanted ? "on" : "off";
+    }
+
+    /* Opens the microphone, and a pipe the recogniser reads from. Returns the read end, or
+       null if any of it failed, in which case the listen goes ahead without the boost. A
+       write only happens when poll() says the pipe has room for it (each write is 1280
+       bytes, under PIPE_BUF, so it cannot block part-way): if the recogniser stops reading,
+       audio is dropped rather than the thread stalling with the microphone open. */
+    private ParcelFileDescriptor boostStart(final int seq) {
+        boostStop();
+        boostCloseRead();                            // the previous listen's, long since sent
+        AudioRecord r = null;
+        ParcelFileDescriptor[] pipe = null;
+        try {
+            if (act.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                    != PackageManager.PERMISSION_GRANTED) return null;
+            int min = AudioRecord.getMinBufferSize(BOOST_RATE, AudioFormat.CHANNEL_IN_MONO,
+                                                   AudioFormat.ENCODING_PCM_16BIT);
+            if (min <= 0) return null;
+            r = new AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, BOOST_RATE,
+                                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
+                                Math.max(min * 2, BOOST_RATE / 5 * 2));
+            if (r.getState() != AudioRecord.STATE_INITIALIZED) { r.release(); return null; }
+            pipe = ParcelFileDescriptor.createPipe();
+            final java.io.FileDescriptor out = pipe[1].getFileDescriptor();
+            r.startRecording();
+            if (r.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING) {
+                r.release(); pipe[0].close(); pipe[1].close(); return null;
+            }
+            if (boost == null) boost = QuietBoost.forSpeech(BOOST_RATE);
+            final AudioRecord rec = r;
+            final ParcelFileDescriptor writeEnd = pipe[1];
+            final QuietBoost qb = boost;
+            final java.util.concurrent.atomic.AtomicBoolean run = new java.util.concurrent.atomic.AtomicBoolean(true);
+            boostFlag = run;
+            boostRec = rec;
+            boostThread = new Thread(() -> {
+                final long until = System.currentTimeMillis() + ASR_MAX_MS;   // a ceiling of its own
+                int starved = 0;                                             // 40ms chunks the reader did not take
+                android.system.StructPollfd[] room = { new android.system.StructPollfd() };
+                room[0].fd = out;
+                room[0].events = (short) OsConstants.POLLOUT;
+                short[] buf = new short[BOOST_RATE / 25];         // 40ms
+                byte[] bytes = new byte[buf.length * 2];
+                long lastLevel = 0L;
+                try {
+                    while (run.get() && System.currentTimeMillis() < until) {
+                        int got = rec.read(buf, 0, buf.length);
+                        if (got <= 0) { if (got < 0) break; continue; }
+                        qb.process(buf, got);
+                        double sum = 0;
+                        for (int k = 0; k < got; k++) {
+                            short v = buf[k];
+                            bytes[2 * k] = (byte) (v & 0xff);             // little-endian PCM
+                            bytes[2 * k + 1] = (byte) ((v >> 8) & 0xff);
+                            sum += (double) v * v;
+                        }
+                        room[0].revents = 0;
+                        boolean wrote = false;
+                        if (Os.poll(room, 0) > 0) {
+                            if ((room[0].revents & (OsConstants.POLLERR | OsConstants.POLLHUP)) != 0) break;   // reader gone
+                            if ((room[0].revents & OsConstants.POLLOUT) != 0) { Os.write(out, bytes, 0, got * 2); wrote = true; }
+                        }                                             // else: full, drop this 40ms
+                        /* A recogniser that ignores our audio opens its own microphone and never
+                           reads the pipe; the pipe fills in about two seconds and stays full. Two
+                           captures at once can leave one of them hearing silence, so stop ours,
+                           and stop offering the boost for this launch. */
+                        starved = wrote ? 0 : starved + 1;
+                        /* After ready, a full pipe can just mean it has stopped reading at the end of
+                           her speech while it works out the result; that is not a verdict. */
+                        if (starved > 25) { if (!boostReady) boostDead = true; break; }
+                        long now = System.currentTimeMillis();
+                        if (now - lastLevel >= LEVEL_EVERY_MS) {
+                            lastLevel = now;
+                            // on the recogniser's own rough scale: -60 dBFS is -2, -10 dBFS is 8
+                            double dbfs = 20 * Math.log10(Math.max(Math.sqrt(sum / got) / 32768.0, 1e-6));
+                            double v = Math.round(((dbfs + 60) / 5 - 2) * 10) / 10.0;
+                            toJs("window.__asrLevel && window.__asrLevel(" + v + "," + seq + ")");
+                        }
+                    }
+                } catch (Throwable ignored) {
+                } finally {
+                    try { rec.stop(); } catch (Throwable ignored) {}
+                    try { rec.release(); } catch (Throwable ignored) {}
+                    try { writeEnd.close(); } catch (Throwable ignored) {}   // end of audio for the recogniser
+                    micFreeAt = System.currentTimeMillis() + SETTLE_MS;
+                }
+            }, "mic-boost");
+            boostThread.start();
+            boostRead = pipe[0];
+            return pipe[0];
+        } catch (Throwable t) {
+            try { if (r != null) r.release(); } catch (Throwable ignored) {}
+            try { if (pipe != null) { pipe[0].close(); pipe[1].close(); } } catch (Throwable ignored) {}
+            return null;
+        }
+    }
+
+    /* The microphone the boost holds is released here, within one 40ms read. Called at the
+       end of every listen, on every stop, and whenever the recogniser is released. */
+    private void boostStop() {
+        java.util.concurrent.atomic.AtomicBoolean run = boostFlag;
+        boostFlag = null;
+        if (run != null) run.set(false);
+        AudioRecord r = boostRec;
+        boostRec = null;
+        if (r != null) { try { r.stop(); } catch (Throwable ignored) {} }   // unblocks a read in progress
+        Thread t = boostThread;
+        boostThread = null;
+        if (t != null) {
+            try { t.join(150); } catch (Throwable ignored) {}
+            if (t.isAlive()) boost = null;          // it still holds the old QuietBoost; the next capture gets its own
+        }
+        /* The read end is not closed here. A stop can land between the recogniser being
+           handed the listen and the listen actually being sent to its service, and a closed
+           descriptor there throws inside SpeechRecognizer. It is closed by the next capture
+           or after the recogniser is destroyed, when nothing can still be sending it. */
+    }
+
+    private void boostCloseRead() {
+        ParcelFileDescriptor rd = boostRead;
+        boostRead = null;
+        if (rd != null) { try { rd.close(); } catch (Throwable ignored) {} }
     }
 
     /* Whether a language has an on-device model is a fact about the tablet, not about
@@ -382,7 +730,7 @@ public class Bridge {
         /* A begin() can still be on its way: the delayed start after the mic handover, or the
            network retry. Moving the number on makes it stand down, so a stop is a stop and the
            recogniser cannot open while the tablet is saying the word. */
-        ++asrSeq;
+        asrSeq.incrementAndGet();
         ui.post(this::releaseAsr);
     }
 
@@ -395,9 +743,13 @@ public class Bridge {
 
     private void releaseAsr() {
         cancelWatchdog();
+        cancelIdle();
+        boostStop();
         boolean had = (asr != null);
         try { if (asr != null) { asr.cancel(); asr.destroy(); } } catch (Throwable ignored) {}
+        boostCloseRead();                            // destroy() dropped anything still to be sent
         asr = null;
+        asrUsed = false;
         asrListening = false;
         asrLang = null;
         asrOffline = false;
@@ -407,6 +759,12 @@ public class Bridge {
     /** Milliseconds the page should wait before asking for the microphone itself. */
     @JavascriptInterface
     public long micBusyFor() {
+        long left = Math.max(micFreeAt, peerFreeAt) - System.currentTimeMillis();
+        return left > 0 ? left : 0;
+    }
+
+    /** What the next listen waits for: only a recogniser that was destroyed, or our own capture. */
+    private long listenWait() {
         long left = micFreeAt - System.currentTimeMillis();
         return left > 0 ? left : 0;
     }

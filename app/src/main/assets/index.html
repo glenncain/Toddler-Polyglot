@@ -51,8 +51,15 @@ body{font-family:var(--display);background:var(--night);color:var(--ink);-webkit
   position:absolute;width:min(74vh,92vw);aspect-ratio:1;border-radius:16%;
   border:4px solid currentColor;color:var(--on);opacity:0;pointer-events:none;
 }
-#ear.on{animation:breathe 3.6s ease-in-out infinite}
-@keyframes breathe{0%,100%{opacity:.10;transform:scale(.97)}50%{opacity:.42;transform:scale(1.03)}}
+/* Three states, and each one tells the truth. on: the word has been said and the microphone
+   is on its way, a faint still ring. ready: the recogniser has the microphone, the ring
+   breathes. hearing: her voice is coming in, the ring follows it (--lvl, 0 to 1). The ring
+   used to breathe from the moment the word ended, a second before anything was listening,
+   so what she said straight back went nowhere and looked like it had been heard. */
+#ear.on{opacity:.12;transition:opacity .15s ease,transform .09s linear}
+#ear.on.ready{animation:breathe 3.6s ease-in-out infinite}
+#ear.on.ready.hearing{animation:none;opacity:calc(.38 + var(--lvl,0)*.55);transform:scale(calc(1 + var(--lvl,0)*.06))}
+@keyframes breathe{0%,100%{opacity:.16;transform:scale(.97)}50%{opacity:.46;transform:scale(1.03)}}
 
 /* the end of eleven minutes, said without a word */
 #moon{position:absolute;font-size:min(28vh,34vw);opacity:0;transition:opacity 1.2s ease;pointer-events:none}
@@ -145,7 +152,7 @@ textarea{width:100%;height:150px;font-family:var(--data);font-size:11px;line-hei
 .meter{height:9px;border-radius:99px;background:var(--line);overflow:hidden;margin-top:7px}
 .meter span{display:block;height:100%;width:0;background:var(--ja);border-radius:99px;transition:width .08s linear}
 .pair{display:flex;gap:7px;flex:none}
-@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}#ear.on{opacity:.34}#moon.on{opacity:.9}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}#ear.on{opacity:.2}#ear.on.ready{opacity:.34}#ear.on.ready.hearing{opacity:calc(.38 + var(--lvl,0)*.55)}#moon.on{opacity:.9}}
 </style>
 </head>
 <body>
@@ -276,7 +283,7 @@ const ttsAbandon = ()=>{ for(const id of Object.keys(ttsWaiting)) ttsSettle(id, 
 window.__ttsDone = (id, ok)=>ttsSettle(id, !!ok);
 window.__ttsReady = ()=>{ if(NB){ try{ NCAP=JSON.parse(NB.capabilities()); }catch(e){} } };
 window.__micGranted = ()=>{};
-let asrHit = null, asrErr = null, asrOpen = null, asrEnd = null, asrWant = -1;
+let asrHit = null, asrErr = null, asrOpen = null, asrEnd = null, asrLvl = null, asrSpk = null, asrWant = -1;
 /* Results are stamped with the listen that produced them. A recogniser being torn down can
    still push one, and there is only ever one callback slot, so without this an old card's
    transcript gets judged against the word now on screen — and advances it for something she
@@ -297,7 +304,11 @@ window.__asrError = (name, wasOffline, hadMic, retrying, seq)=>{
 /* Fires when the recogniser actually has the microphone. "It opened and heard
    nothing" and "it never opened at all" look identical from the page otherwise,
    and they are different faults. */
-window.__asrReady = ()=>{ if(asrOpen) asrOpen(); };
+window.__asrReady = (wasOffline, seq)=>{ if(seq!==undefined && seq!==asrWant) return; if(asrOpen) asrOpen(); };
+/* Her voice, as the recogniser hears it (roughly -2 to 10 dB), and the moment it decides
+   she has started speaking. They move the ring; nothing is judged on them. */
+window.__asrLevel = (v, seq)=>{ if(seq===asrWant && asrLvl) asrLvl(Number(v)); };
+window.__asrSpeech = seq=>{ if(seq===asrWant && asrSpk) asrSpk(); };
 /* Android's recogniser hears one utterance, hands back its final guess and stops, with no
    error. Without this the page never learned that a listen had ended, so the first thing she
    said that was not quite the word shut the ear for the rest of the card. */
@@ -601,6 +612,50 @@ function heard(t,e){
   }
   return false;
 }
+/* The ring, and how long the microphone takes to be ready. The two numbers the panel shows
+   are measured here, on the tablet itself: from the word ending (or from a guess that was
+   not the word) to the recogniser reporting it has the microphone. Everything she says in
+   that gap goes nowhere, so it is the number to keep small. */
+const REARM_MS=40;                       // after a guess that was not the word, ask again at once
+const EAR={
+  t:0, again:false, open:false, floor:null, hush:null,
+  first:[], rearm:[], spoke:0, quietPeaks:0, peak:-99,
+  el(){ return $("ear"); },
+  asked(){
+    const el=this.el(); el.classList.add("on"); el.classList.remove("ready","hearing");
+    this.t=performance.now(); this.peak=-99;
+  },
+  ready(){
+    const el=this.el(); if(!el.classList.contains("on")) return;
+    if(this.t){
+      const ms=Math.round(performance.now()-this.t), a=this.again?this.rearm:this.first;
+      a.push(ms); if(a.length>20) a.shift();
+      this.t=0;
+    }
+    this.open=true; el.classList.add("ready");
+  },
+  level(v){
+    if(!this.open||!isFinite(v)) return;
+    this.floor = this.floor===null ? v : Math.min(v, this.floor+0.02);   // the room, slowly
+    if(v>this.peak) this.peak=v;
+    const lvl=Math.max(0,Math.min(1,(v-this.floor-1.5)/6));
+    const el=this.el(); el.style.setProperty("--lvl",lvl.toFixed(2));
+    if(lvl>0.12){ el.classList.add("hearing"); clearTimeout(this.hush); this.hush=setTimeout(()=>this.quiet(),350); }
+  },
+  speech(){ this.spoke++; const el=this.el(); if(this.open){ el.classList.add("hearing"); el.style.setProperty("--lvl","0.5"); clearTimeout(this.hush); this.hush=setTimeout(()=>this.quiet(),900); } },
+  quiet(){ clearTimeout(this.hush); this.hush=null; this.el().classList.remove("hearing"); },
+  /* a listen ended; the next one is a re-arm, timed separately from the first */
+  closed(){
+    if(this.open && this.peak>-99 && this.floor!==null && this.peak-this.floor<4) this.quietPeaks++;
+    this.open=false; this.again=true; this.quiet(); this.el().classList.remove("ready");
+  },
+  off(){
+    this.open=false; this.again=false; this.t=0; this.quiet();
+    this.el().classList.remove("on","ready","hearing");
+  },
+};
+const median=a=>{ if(!a.length) return null; const b=[...a].sort((x,y)=>x-y); return b[b.length>>1]; };
+
 /* The card does not advance until it hears her, so a recogniser that stops listening —
    it timed out, the device was busy, it gave up — cannot just be left dead. She is still
    standing in front of the picture. Put it back, up to a point. */
@@ -615,21 +670,32 @@ function listen(e,hit){
     if(!NCAP||!NCAP.asr) return false;
     let tries=0, ends=0;
     const arm=()=>{
+      EAR.asked();
       asrHit = txt=>{ if(stillHers() && heard(txt,e)) hit(); };
-      asrErr = ()=>{
-        if(!stillHers() || ++tries>6){ $("ear").classList.remove("on"); return; }
-        setTimeout(()=>{ if(stillHers()) arm(); }, 250);
+      asrOpen = ()=>{ if(stillHers()) EAR.ready(); };
+      asrLvl = v=>{ if(stillHers()) EAR.level(v); };
+      asrSpk = ()=>{ if(stillHers()) EAR.speech(); };
+      /* "Heard nothing" and "heard nothing it knew" (it had the microphone) leave a healthy
+         recogniser that the bridge keeps warm, so ask again straight away. Anything else
+         gets a breath first, and a cap, because a broken recogniser fails instantly. */
+      asrErr = info=>{
+        EAR.closed();
+        if(!stillHers() || ++tries>6){ EAR.off(); return; }
+        const quiet = info && info.mic && (info.name==="no-speech"||info.name==="no-match");
+        if(quiet) tries--;                                    // silence is not a fault
+        setTimeout(()=>{ if(stillHers()) arm(); }, quiet ? REARM_MS : 250);
       };
       /* It heard something and it was not the word: listen again. The final guess arrives
          in the same call, just before this, so a hit has already moved the card on and
          stillHers() is false. Ends need speech, so they cannot spin the way errors can;
          the cap is only a backstop, and the card's own 19s still ends it. */
       asrEnd = ()=>{
-        if(!stillHers() || ++ends>30){ $("ear").classList.remove("on"); return; }
-        setTimeout(()=>{ if(stillHers()) arm(); }, 150);
+        EAR.closed();
+        if(!stillHers() || ++ends>30){ EAR.off(); return; }
+        setTimeout(()=>{ if(stillHers()) arm(); }, REARM_MS);
       };
       try{ asrWant = NB.startListening(LANGS[e.lang].code); }
-      catch(_){ asrHit=null; asrErr=null; asrEnd=null; asrWant=-1; }
+      catch(_){ asrHit=null; asrErr=null; asrEnd=null; asrOpen=null; asrLvl=null; asrSpk=null; asrWant=-1; }
     };
     arm();
     return true;
@@ -639,6 +705,10 @@ function listen(e,hit){
     rec=new SR(); rec.lang=LANGS[e.lang].code;
     rec.interimResults=true; rec.continuous=true; rec.maxAlternatives=5;
     const mine=rec;
+    EAR.asked();
+    rec.onaudiostart=()=>{ if(rec===mine&&stillHers()) EAR.ready(); };
+    rec.onspeechstart=()=>{ if(rec===mine&&stillHers()) EAR.speech(); };
+    rec.onspeechend=()=>{ if(rec===mine&&stillHers()) EAR.quiet(); };
     rec.onresult=ev=>{
       if(rec!==mine||!stillHers()) return;         // a superseded or stopped recogniser, still talking
       let all="";
@@ -646,14 +716,15 @@ function listen(e,hit){
       if(heard(all,e)) hit();
     };
     rec.onerror=()=>{};
-    rec.onend=()=>{ if(rec===mine && stillHers()) { try{ start(); }catch(_){ } } };
+    rec.onend=()=>{ if(rec===mine && stillHers()){ EAR.closed(); try{ start(); }catch(_){ } } };
     rec.start();
   };
   try{ start(); return true; }catch(_){ return false; }
 }
 const unlisten=()=>{
   earGen++;
-  if(NB){ asrHit=null; asrErr=null; asrOpen=null; asrEnd=null; asrWant=-1; try{ NB.stopListening(); }catch(e){} return; }
+  EAR.off();
+  if(NB){ asrHit=null; asrErr=null; asrOpen=null; asrEnd=null; asrLvl=null; asrSpk=null; asrWant=-1; try{ NB.stopListening(); }catch(e){} return; }
   try{if(rec)rec.stop()}catch(e){}
 };
 
@@ -695,7 +766,7 @@ function card(){
   document.documentElement.style.setProperty("--on",LANGS[e.lang].on);
   const p=$("picture");
   showPicture(p,e); p.classList.remove("said"); p.classList.add("invite");
-  $("ear").classList.remove("on");
+  EAR.off();
   if(NB&&NB.prepare){ try{ NB.prepare(LANGS[e.lang].code); }catch(_){} }  // load the voice now, not on her tap
   later(()=>{ if(!tapped&&!ended&&queue[idx]===e) heard0(e); },NUDGE_MS);   // she has not tapped; say it for her
 }
@@ -718,7 +789,9 @@ function openEar(e){
    app's own voice — a card advancing on its own, and a word marked learned that she has
    never once said out loud. */
 async function replay(e,times){
-  unlisten(); $("ear").classList.remove("on");
+  unlisten(); EAR.off();
+  /* the stop just destroyed the recogniser; build the next one while the word plays */
+  if(NB&&NB.prepare){ try{ NB.prepare(LANGS[e.lang].code); }catch(_){} }
   if(await say(e,times)) openEar(e);            // cut off by a newer saying: that one opens it
 }
 async function heard0(e){                                              // play, then open the ear
@@ -761,7 +834,7 @@ $("picture").onclick=()=>{
 };
 function advance(said,unprompted){
   if(busy||ended) return; busy=true;
-  clearT(); unlisten(); cardHit=null; $("ear").classList.remove("on");
+  clearT(); unlisten(); cardHit=null; EAR.off();
   const e=queue[idx],st=w(e.id);
   st.seen++; st.lastDay=S.day;
   if(said){ st.said++; if(unprompted&&prompts===0) st.unprompted++; st.missStreak=0; }
@@ -829,7 +902,7 @@ function standDown(){
   ended=true;                                 // nothing armed can start another card
   clearT(); releaseMic(); cardHit=null; hush();
   busy=false; tapped=false;
-  $("ear").classList.remove("on");
+  EAR.off();
   $("picture").classList.remove("invite");
   saveState();                                // the cards she did already are hers, kept
 }
@@ -850,7 +923,7 @@ window.__resume = resume;                     // ...and this from onResume(), no
    white card with a baby face on it, which did nothing when tapped: a grown-up who pressed
    "Back to her screen" before "Start today" handed her a card that could never answer. */
 function restScreen(){
-  $("ear").classList.remove("on"); $("picture").classList.remove("invite","press","said");
+  EAR.off(); $("picture").classList.remove("invite","press","said");
   $("hands").style.display="none";
   document.documentElement.style.setProperty("--stage","var(--night)");
   document.documentElement.style.setProperty("--on","#EBE7F1");
@@ -1244,12 +1317,44 @@ function line(label,sub,p){
   r.appendChild(t); if(p) r.appendChild(p); return r;
 }
 
+/* Measured during her sessions, not by the check: how long the microphone took to be
+   ready, and how often what came in was barely above the room. Shown whether or not the
+   check has been run, because it comes from the cards themselves. */
+function earRow(box){
+  if(!EAR.first.length&&!EAR.rearm.length) return;
+  const s=ms=>ms===null?"not seen yet":(ms/1000).toFixed(2)+"s";
+  const f=median(EAR.first), r=median(EAR.rearm), worst=Math.max(f||0,r||0);
+  box.appendChild(line("Microphone ready",
+    "After the word: "+s(f)+" ("+EAR.first.length+" listens). After a guess that was not the word: "+s(r)+" ("+EAR.rearm.length+")."
+    +(EAR.spoke?" It heard her start speaking "+EAR.spoke+" times.":"")
+    +(EAR.quietPeaks?" "+EAR.quietPeaks+" listens came in barely above the room: she may be too far away or too quiet.":""),
+    pill(worst<=700?"good":(worst<=1500?"warn":"bad"), worst<=700?"quick":(worst<=1500?"slow":"very slow"))));
+}
+/* The quiet-voice boost lives in the bridge (Android 13 and up). Off unless you turn it on
+   here, because whether this tablet's recogniser accepts audio handed to it is something
+   only the tablet can answer: run the per-language listening test below with it on, from
+   where she sits, at her volume. */
+function boostRow(box){
+  if(!NB||typeof NB.micBoost!=="function") return;
+  let st="off"; try{ st=NB.micBoost(); }catch(e){}
+  if(st==="unsupported") return;
+  const b=document.createElement("button"); b.className="tiny"; b.id="boostBtn";
+  b.textContent = st==="on" ? "on" : "off"; b.title="Quiet-voice boost";
+  b.onclick=()=>{ try{ NB.setMicBoost(st!=="on"); }catch(e){} paintDiag(); };
+  const r=line("Quiet-voice boost",
+    st==="failed" ? "This tablet's recogniser would not take the boosted audio, so it went back to its own microphone for now. Turn it on again to retry."
+    : st==="on" ? "On. Quiet speech is lifted by up to 18 dB before the recogniser hears it; the room is left alone."
+    : "Off. Turn it on if she speaks softly or sits back from the tablet, then run a listening test.",
+    pill(st==="on"?"good":(st==="failed"?"bad":""), st));
+  r.appendChild(b); box.appendChild(r);
+}
 function paintDiag(){
   const box=$("diagRows"); if(!box) return;
   box.innerHTML="";
   if(!DIAG.ran){
     $("diagHd").textContent="Not run yet";
     box.appendChild(line("Nothing measured","Press Run the check. It takes about five seconds, then two taps per language.",null));
+    earRow(box); boostRow(box);
     return;
   }
   $("diagHd").textContent = NB
@@ -1278,6 +1383,8 @@ function paintDiag(){
     DIAG.asr ? "Present. Whether it works offline is the per-language test below."
              : "Absent. She can still use the app; you press ✓ when she says the word.",
     pill(DIAG.asr?"good":"warn", DIAG.asr?"present":"missing")));
+
+  earRow(box); boostRow(box);
 
   if(NB && DIAG.recog){
     const r=DIAG.recog, who=r.package&&r.package!=="?" ? r.package : "an unnamed app";

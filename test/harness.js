@@ -152,6 +152,8 @@ function installBridge(win) {
     prefClear() { for (const k of Object.keys(prefs)) delete prefs[k]; },
     saveFile: () => '',
     copyToClipboard: () => true,
+    micBoost: () => prefs['em:mic-boost'] === '1' ? 'on' : 'off',
+    setMicBoost(on) { prefs['em:mic-boost'] = on ? '1' : '0'; },
   };
 
   return { tts, asr };
